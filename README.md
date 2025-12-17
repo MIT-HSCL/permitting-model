@@ -53,7 +53,7 @@ You can modify the simulation parameters in `run_simulation.py`:
 
 - `NUM_PERMITS`: Number of permits to simulate (default: 100)
 - `RANDOM_SEED`: Random seed for reproducibility (default: 42)
-- `INTER_ARRIVAL_TIME`: Average time between permit arrivals in hours (default: 24.0)
+- `INTER_ARRIVAL_TIME`: Average time between permit arrivals in days (default: 1.0)
 
 ### Customizing the Simulation
 
@@ -131,7 +131,7 @@ The simulation provides:
 
 ## Notes
 
-- All time distributions use days as the base unit, converted to hours for simulation
+- All time distributions and simulation times are in days
 - The simulation uses SimPy's discrete event simulation engine
 - Random seed can be set for reproducible results
 - The model assumes permits arrive according to an exponential inter-arrival distribution

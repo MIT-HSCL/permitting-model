@@ -28,25 +28,59 @@ class Permit:
     permit_id: int
     segment: Segment
     created_at: float
-    # Timestamps for tracking
-    debris_removal_start: Optional[float] = None
+    # Timestamps for tracking (request time, service start, service end)
+    # Debris removal
+    debris_removal_request: Optional[float] = None
+    debris_removal_service_start: Optional[float] = None
     debris_removal_end: Optional[float] = None
+    # Authorization (no waiting, just service time)
     authorization_start: Optional[float] = None
     authorization_end: Optional[float] = None
+    # Plan preparation (no waiting, just service time)
     plan_prep_start: Optional[float] = None
     plan_prep_end: Optional[float] = None
-    planning_start: Optional[float] = None
+    # Planning department
+    planning_request: Optional[float] = None
+    planning_service_start: Optional[float] = None
     planning_end: Optional[float] = None
-    public_works_start: Optional[float] = None
+    # Public Works
+    public_works_request: Optional[float] = None
+    public_works_service_start: Optional[float] = None
     public_works_end: Optional[float] = None
-    fire_review_start: Optional[float] = None
+    # Fire review
+    fire_review_request: Optional[float] = None
+    fire_review_service_start: Optional[float] = None
     fire_review_end: Optional[float] = None
-    public_health_start: Optional[float] = None
+    # Public Health review
+    public_health_request: Optional[float] = None
+    public_health_service_start: Optional[float] = None
     public_health_end: Optional[float] = None
+    # Final
     ready_for_construction: Optional[float] = None
     # Tracking
     public_works_rechecks: int = 0
     public_works_approved: Optional[bool] = None
+    
+    # Legacy fields for backward compatibility (deprecated)
+    @property
+    def debris_removal_start(self):
+        return self.debris_removal_request
+    
+    @property
+    def planning_start(self):
+        return self.planning_request
+    
+    @property
+    def public_works_start(self):
+        return self.public_works_request
+    
+    @property
+    def fire_review_start(self):
+        return self.fire_review_request
+    
+    @property
+    def public_health_start(self):
+        return self.public_health_request
 
 
 class PermitSimulation:
@@ -81,7 +115,7 @@ class PermitSimulation:
         # Randomly assign plan type (could be adjusted based on actual distribution)
         plan_type = random.choices(
             ['pre_approved', 'custom', 'self_cert'],
-            weights=[1, 1, 1]  # Equal weights, adjust as needed
+            weights=[0.02, 0.9, 0.08] 
         )[0]
         
         if plan_type == 'pre_approved':
@@ -103,14 +137,14 @@ class PermitSimulation:
     
     def sample_uniform_days(self) -> float:
         """Sample uniform: 2 or 3 days, each with 50% probability."""
-        days = random.choice([2, 3])
-        return days * 24  # Convert to hours
+        return random.choice([2, 3])
     
     def epa_debris_removal(self, permit: Permit):
         """EPA Debris Removal (Phase 1)."""
-        permit.debris_removal_start = self.env.now
+        permit.debris_removal_request = self.env.now
         with self.epa_debris_servers.request() as request:
             yield request
+            permit.debris_removal_service_start = self.env.now
             # Uniform: 2 or 3 days, each with 50% probability
             duration = self.sample_uniform_days()
             yield self.env.timeout(duration)
@@ -118,6 +152,8 @@ class PermitSimulation:
     
     def usace_debris_removal(self, permit: Permit):
         """USACE Debris Removal (Phase 2)."""
+        # Note: We track EPA debris removal timing, USACE follows immediately after
+        # so we don't need separate request/service tracking for USACE
         with self.usace_debris_servers.request() as request:
             yield request
             # Uniform: 2 or 3 days, each with 50% probability
@@ -127,9 +163,9 @@ class PermitSimulation:
     def securing_authorization(self, permit: Permit):
         """Securing authorization & funding to rebuild."""
         permit.authorization_start = self.env.now
-        # N(42, 20) in days, convert to hours
+        # N(42, 20) days
         duration_days = self.sample_normal(42, 20)
-        yield self.env.timeout(duration_days * 24)
+        yield self.env.timeout(duration_days)
         permit.authorization_end = self.env.now
     
     def prepare_submit_plans(self, permit: Permit):
@@ -143,7 +179,7 @@ class PermitSimulation:
         else:  # Segments 3-6
             duration_days = self.sample_lognormal(150, 0.6)
         
-        yield self.env.timeout(duration_days * 24)
+        yield self.env.timeout(duration_days)
         permit.plan_prep_end = self.env.now
     
     def planning_department(self, permit: Permit):
@@ -154,9 +190,10 @@ class PermitSimulation:
             # Skip planning department
             return
         
-        permit.planning_start = self.env.now
+        permit.planning_request = self.env.now
         with self.planning_servers.request() as request:
             yield request
+            permit.planning_service_start = self.env.now
             
             # Segments 2 & 4 (non-like-for-like) - N(33, 10) days
             # Segments 1 & 3 (like-for-like) - N(3, 1) days
@@ -165,7 +202,7 @@ class PermitSimulation:
             else:  # Segments 1 & 3
                 duration_days = self.sample_normal(3, 1)
             
-            yield self.env.timeout(duration_days * 24)
+            yield self.env.timeout(duration_days)
         permit.planning_end = self.env.now
     
     def public_works_initial_check(self, permit: Permit):
@@ -178,12 +215,13 @@ class PermitSimulation:
             permit.public_works_approved = True
             return
         
-        permit.public_works_start = self.env.now
+        permit.public_works_request = self.env.now
         with self.public_works_servers.request() as request:
             yield request
+            permit.public_works_service_start = self.env.now
             # N(11.6, 2) days
             duration_days = self.sample_normal(11.6, 2)
-            yield self.env.timeout(duration_days * 24)
+            yield self.env.timeout(duration_days)
         
         # 75% approved, 25% need re-check
         approved = random.random() < 0.75
@@ -196,11 +234,14 @@ class PermitSimulation:
     
     def public_works_recheck(self, permit: Permit):
         """Public works (Building & Safety) Re-check."""
+        # Note: We don't track individual re-check waiting times separately
+        # The public_works_service_start is updated when service begins
         with self.public_works_servers.request() as request:
             yield request
+            permit.public_works_service_start = self.env.now  # Update service start time
             # N(8.3, 2) days
             duration_days = self.sample_normal(8.3, 2)
-            yield self.env.timeout(duration_days * 24)
+            yield self.env.timeout(duration_days)
         
         # 75% approved, 25% need re-check again
         approved = random.random() < 0.75
@@ -213,22 +254,24 @@ class PermitSimulation:
     
     def fire_review(self, permit: Permit):
         """Fire department review (30% of permits, low confidence)."""
-        permit.fire_review_start = self.env.now
+        permit.fire_review_request = self.env.now
         with self.fire_servers.request() as request:
             yield request
+            permit.fire_review_service_start = self.env.now
             # N(13, 2) days
             duration_days = self.sample_normal(13, 2)
-            yield self.env.timeout(duration_days * 24)
+            yield self.env.timeout(duration_days)
         permit.fire_review_end = self.env.now
     
     def public_health_review(self, permit: Permit):
         """Public Health department review (1.3% of permits)."""
-        permit.public_health_start = self.env.now
+        permit.public_health_request = self.env.now
         with self.public_health_servers.request() as request:
             yield request
+            permit.public_health_service_start = self.env.now
             # N(10, 2) days - low confidence
             duration_days = self.sample_normal(10, 2)
-            yield self.env.timeout(duration_days * 24)
+            yield self.env.timeout(duration_days)
         permit.public_health_end = self.env.now
     
     def permit_process(self, permit: Permit):
@@ -255,8 +298,9 @@ class PermitSimulation:
             while not permit.public_works_approved:
                 yield self.env.process(self.public_works_recheck(permit))
         else:
-            # Pre-approved plans are automatically approved
-            permit.public_works_start = self.env.now
+            # Pre-approved plans are automatically approved (no waiting, instant)
+            permit.public_works_request = self.env.now
+            permit.public_works_service_start = self.env.now
             permit.public_works_end = self.env.now
             permit.public_works_approved = True
         
