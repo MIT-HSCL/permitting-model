@@ -18,13 +18,9 @@ def calculate_stage_times(permit: Permit) -> dict:
     stages = {}
     
     # Debris removal (EPA + USACE) - separate waiting and service
-    if permit.debris_removal_request and permit.debris_removal_end:
-        if permit.debris_removal_service_start:
-            stages['Debris Removal (Waiting)'] = permit.debris_removal_service_start - permit.debris_removal_request
-            stages['Debris Removal (Service)'] = permit.debris_removal_end - permit.debris_removal_service_start
-        else:
-            # Fallback for old data
-            stages['Debris Removal'] = permit.debris_removal_end - permit.debris_removal_request
+    if permit.debris_removal_request and permit.debris_removal_service_start and permit.debris_removal_end:
+        stages['Debris Removal (Waiting)'] = permit.debris_removal_service_start - permit.debris_removal_request
+        stages['Debris Removal (Service)'] = permit.debris_removal_end - permit.debris_removal_service_start
     
     # Authorization (no waiting, just service time)
     if permit.authorization_start and permit.authorization_end:
@@ -35,54 +31,29 @@ def calculate_stage_times(permit: Permit) -> dict:
         stages['Plan Preparation'] = permit.plan_prep_end - permit.plan_prep_start
     
     # Planning department - separate waiting and service
-    if permit.planning_request and permit.planning_end:
-        if permit.planning_service_start:
-            stages['Planning (Waiting)'] = permit.planning_service_start - permit.planning_request
-            stages['Planning (Service)'] = permit.planning_end - permit.planning_service_start
-        else:
-            # Fallback for old data
-            stages['Planning'] = permit.planning_end - permit.planning_request
+    if permit.planning_request and permit.planning_service_start and permit.planning_end:
+        stages['Planning (Waiting)'] = permit.planning_service_start - permit.planning_request
+        stages['Planning (Service)'] = permit.planning_end - permit.planning_service_start
     
     # Public Works - separate waiting and service
-    if permit.public_works_request and permit.public_works_end:
-        if permit.public_works_service_start:
-            # Use cumulative waiting time if available (accounts for recheck waiting)
-            if hasattr(permit, 'public_works_total_waiting') and permit.public_works_total_waiting > 0:
-                stages['Public Works (Waiting)'] = permit.public_works_total_waiting
-            else:
-                # Fallback: use first service start time (doesn't account for recheck waiting)
-                stages['Public Works (Waiting)'] = permit.public_works_service_start - permit.public_works_request
-            stages['Public Works (Service)'] = permit.public_works_end - permit.public_works_service_start
-        else:
-            # Fallback for old data
-            stages['Public Works'] = permit.public_works_end - permit.public_works_request
+    if permit.public_works_request and permit.public_works_service_start and permit.public_works_end:
+        stages['Public Works (Waiting)'] = permit.public_works_service_start - permit.public_works_request
+        stages['Public Works (Service)'] = permit.public_works_end - permit.public_works_service_start
     
     # Fire review - separate waiting and service
-    if permit.fire_review_request and permit.fire_review_end:
-        if permit.fire_review_service_start:
-            stages['Fire Review (Waiting)'] = permit.fire_review_service_start - permit.fire_review_request
-            stages['Fire Review (Service)'] = permit.fire_review_end - permit.fire_review_service_start
-        else:
-            # Fallback for old data
-            stages['Fire Review'] = permit.fire_review_end - permit.fire_review_request
+    if permit.fire_review_request and permit.fire_review_service_start and permit.fire_review_end:
+        stages['Fire Review (Waiting)'] = permit.fire_review_service_start - permit.fire_review_request
+        stages['Fire Review (Service)'] = permit.fire_review_end - permit.fire_review_service_start
     
     # Public Health review - separate waiting and service
-    if permit.public_health_request and permit.public_health_end:
-        if permit.public_health_service_start:
-            stages['Public Health (Waiting)'] = permit.public_health_service_start - permit.public_health_request
-            stages['Public Health (Service)'] = permit.public_health_end - permit.public_health_service_start
-        else:
-            # Fallback for old data
-            stages['Public Health'] = permit.public_health_end - permit.public_health_request
+    if permit.public_health_request and permit.public_health_service_start and permit.public_health_end:
+        stages['Public Health (Waiting)'] = permit.public_health_service_start - permit.public_health_request
+        stages['Public Health (Service)'] = permit.public_health_end - permit.public_health_service_start
     
     # Miscellaneous permits - separate waiting and service
-    if permit.misc_request and permit.misc_end:
-        if permit.misc_service_start:
-            stages['Miscellaneous (Waiting)'] = permit.misc_service_start - permit.misc_request
-            stages['Miscellaneous (Service)'] = permit.misc_end - permit.misc_service_start
-        else:
-            # Fallback for old data
-            stages['Miscellaneous'] = permit.misc_end - permit.misc_request
+    if permit.misc_request and permit.misc_service_start and permit.misc_end:
+        stages['Miscellaneous (Waiting)'] = permit.misc_service_start - permit.misc_request
+        stages['Miscellaneous (Service)'] = permit.misc_end - permit.misc_service_start
     
     # Waiting time (gaps between stages)
     total_processing_time = permit.ready_for_construction - permit.created_at if permit.ready_for_construction else None
@@ -107,7 +78,7 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
     # Limit number of permits for readability
     display_permits = permits[:max_permits]
     
-    # Define stage order and colors (waiting times are lighter/dashed, service times are solid)
+    # Define stage order and colors (waiting times are lighter, service times are darker)
     stage_order = [
         'Debris Removal (Waiting)',
         'Debris Removal (Service)',
@@ -115,52 +86,36 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
         'Plan Preparation',
         'Planning (Waiting)',
         'Planning (Service)',
+        'Miscellaneous (Waiting)',
+        'Miscellaneous (Service)',
         'Public Works (Waiting)',
         'Public Works (Service)',
         'Fire Review (Waiting)',
         'Fire Review (Service)',
         'Public Health (Waiting)',
         'Public Health (Service)',
-        'Miscellaneous (Waiting)',
-        'Miscellaneous (Service)',
         'Other Waiting',
-        # Legacy names for backward compatibility
-        'Debris Removal',
-        'Planning',
-        'Public Works',
-        'Fire Review',
-        'Public Health',
-        'Miscellaneous',
-        'Waiting/Other'
     ]
     
     colors = {
         # Waiting times (lighter colors)
         'Debris Removal (Waiting)': '#FFB3B3',
         'Planning (Waiting)': '#FFD4B3',
+        'Miscellaneous (Waiting)': '#D4A5A5',
         'Public Works (Waiting)': '#C8E8D8',
         'Fire Review (Waiting)': '#FBF3B3',
         'Public Health (Waiting)': '#E0C8E8',
-        'Miscellaneous (Waiting)': '#D4A5A5',
         'Other Waiting': '#E0E0E0',
         # Service times (darker colors)
         'Debris Removal (Service)': '#FF6B6B',
         'Planning (Service)': '#FFA07A',
+        'Miscellaneous (Service)': '#C08080',
         'Public Works (Service)': '#98D8C8',
         'Fire Review (Service)': '#F7DC6F',
         'Public Health (Service)': '#BB8FCE',
-        'Miscellaneous (Service)': '#C08080',
         # Stages without waiting (service only)
         'Authorization': '#4ECDC4',
         'Plan Preparation': '#45B7D1',
-        # Legacy names
-        'Debris Removal': '#FF6B6B',
-        'Planning': '#FFA07A',
-        'Public Works': '#98D8C8',
-        'Fire Review': '#F7DC6F',
-        'Public Health': '#BB8FCE',
-        'Miscellaneous': '#C08080',
-        'Waiting/Other': '#D3D3D3'
     }
     
     # Prepare data
@@ -211,16 +166,17 @@ def plot_gantt_chart(permits: List[Permit], max_permits: int = 30, figsize=(14, 
     """
     display_permits = permits[:max_permits]
     
-    # Define stages and colors - format: (name, request_attr, service_start_attr, end_attr, waiting_color, service_color)
+    # Define stages in sequential order (left to right) as they occur in the process
+    # Format: (name, request_attr, service_start_attr, end_attr, waiting_color, service_color)
     stages_info = [
         ('Debris Removal', 'debris_removal_request', 'debris_removal_service_start', 'debris_removal_end', '#FFB3B3', '#FF6B6B'),
         ('Authorization', 'authorization_start', None, 'authorization_end', None, '#4ECDC4'),
         ('Plan Preparation', 'plan_prep_start', None, 'plan_prep_end', None, '#45B7D1'),
         ('Planning', 'planning_request', 'planning_service_start', 'planning_end', '#FFD4B3', '#FFA07A'),
+        ('Miscellaneous', 'misc_request', 'misc_service_start', 'misc_end', '#D4A5A5', '#C08080'),
         ('Public Works', 'public_works_request', 'public_works_service_start', 'public_works_end', '#C8E8D8', '#98D8C8'),
         ('Fire Review', 'fire_review_request', 'fire_review_service_start', 'fire_review_end', '#FBF3B3', '#F7DC6F'),
         ('Public Health', 'public_health_request', 'public_health_service_start', 'public_health_end', '#E0C8E8', '#BB8FCE'),
-        ('Miscellaneous', 'misc_request', 'misc_service_start', 'misc_end', '#D4A5A5', '#C08080'),
     ]
     
     fig, ax = plt.subplots(figsize=figsize)
@@ -228,73 +184,43 @@ def plot_gantt_chart(permits: List[Permit], max_permits: int = 30, figsize=(14, 
     y_positions = list(range(len(display_permits)))
     y_labels = [f"Permit {p.permit_id} ({p.segment.name})" for p in display_permits]
     
-    # Plot each stage for each permit
+    # Plot each stage for each permit in sequential order
     for i, permit in enumerate(display_permits):
         y_pos = len(display_permits) - i - 1
         
-        # Track the last end time to identify gaps
-        last_end_time = permit.created_at
-        
         for stage_info in stages_info:
-            if len(stage_info) == 5:
-                # Old format (backward compatibility)
-                stage_name, start_attr, end_attr, color = stage_info[:4]
-                start_time = getattr(permit, start_attr, None)
-                end_time = getattr(permit, end_attr, None)
+            stage_name, request_attr, service_start_attr, end_attr, waiting_color, service_color = stage_info
+            
+            # Get timestamps for this stage
+            request_time = getattr(permit, request_attr, None) if request_attr else None
+            service_start_time = getattr(permit, service_start_attr, None) if service_start_attr else None
+            end_time = getattr(permit, end_attr, None) if end_attr else None
+            
+            # Skip if this stage doesn't exist for this permit
+            if request_time is None or end_time is None:
+                continue
+            
+            # Handle stages with waiting/service separation
+            if service_start_attr and service_start_time is not None:
+                # Show waiting time and service time separately
+                waiting_duration = service_start_time - request_time
+                service_duration = end_time - service_start_time
                 
-                if start_time is not None and end_time is not None:
-                    # Show gap before this stage if there is one
-                    if start_time > last_end_time + 0.01:  # Small threshold to avoid tiny gaps
-                        gap_duration = start_time - last_end_time
-                        ax.barh(y_pos, gap_duration, left=last_end_time, height=0.6,
-                               color='#FFD4B3', alpha=0.6, edgecolor='black', 
-                               linewidth=0.5, hatch='///', label='Waiting/Gap (between stages)' if i == 0 and stage_info == stages_info[0] else '')
-                    
-                    duration = end_time - start_time
-                    if duration > 0:
-                        ax.barh(y_pos, duration, left=start_time, height=0.6,
-                               color=color, alpha=0.8, edgecolor='black', linewidth=0.5)
-                    
-                    # Update last_end_time
-                    last_end_time = max(last_end_time, end_time)
+                # Always show waiting bar if there's any waiting time (even very small amounts)
+                if waiting_duration > 0.001:  # Small threshold to show even tiny waiting times
+                    ax.barh(y_pos, waiting_duration, left=request_time, height=0.6,
+                           color=waiting_color, alpha=0.6, edgecolor='black', 
+                           linewidth=0.5, hatch='///')
+                if service_duration > 0:
+                    ax.barh(y_pos, service_duration, left=service_start_time, height=0.6,
+                           color=service_color, alpha=0.8, edgecolor='black', linewidth=0.5)
             else:
-                # New format with waiting/service separation
-                stage_name, request_attr, service_start_attr, end_attr, waiting_color, service_color = stage_info
-                
-                request_time = getattr(permit, request_attr, None)
-                service_start_time = getattr(permit, service_start_attr, None) if service_start_attr else None
-                end_time = getattr(permit, end_attr, None)
-                
-                if request_time is not None and end_time is not None:
-                    # Show gap before this stage if there is one
-                    if request_time > last_end_time + 0.01:  # Small threshold to avoid tiny gaps
-                        gap_duration = request_time - last_end_time
-                        ax.barh(y_pos, gap_duration, left=last_end_time, height=0.6,
-                               color='#FFD4B3', alpha=0.6, edgecolor='black', 
-                               linewidth=0.5, hatch='///', label='Waiting/Gap (between stages)' if i == 0 and stage_info == stages_info[0] else '')
-                    
-                    if service_start_attr and service_start_time is not None:
-                        # Show waiting time and service time separately
-                        waiting_duration = service_start_time - request_time
-                        service_duration = end_time - service_start_time
-                        
-                        if waiting_duration > 0:
-                            ax.barh(y_pos, waiting_duration, left=request_time, height=0.6,
-                                   color=waiting_color, alpha=0.6, edgecolor='black', 
-                                   linewidth=0.5, hatch='///', label=f'{stage_name} (Waiting)' if i == 0 else '')
-                        if service_duration > 0:
-                            ax.barh(y_pos, service_duration, left=service_start_time, height=0.6,
-                                   color=service_color, alpha=0.8, edgecolor='black', linewidth=0.5,
-                                   label=f'{stage_name} (Service)' if i == 0 else '')
-                    else:
-                        # No service start time (backward compatibility or no waiting)
-                        duration = end_time - request_time
-                        if duration > 0:
-                            ax.barh(y_pos, duration, left=request_time, height=0.6,
-                                   color=service_color, alpha=0.8, edgecolor='black', linewidth=0.5)
-                    
-                    # Update last_end_time to the end of this stage
-                    last_end_time = max(last_end_time, end_time)
+                # No service start time (stages without waiting, like Authorization, Plan Prep)
+                duration = end_time - request_time
+                if duration > 0:
+                    ax.barh(y_pos, duration, left=request_time, height=0.6,
+                           color=service_color, alpha=0.8, edgecolor='black', linewidth=0.5,
+                           label=stage_name if i == 0 and stage_name not in [l.get_label() for l in ax.get_legend_handles_labels()[0] if hasattr(l, 'get_label')] else '')
     
     ax.set_yticks(y_positions)
     ax.set_yticklabels(y_labels)
@@ -303,41 +229,34 @@ def plot_gantt_chart(permits: List[Permit], max_permits: int = 30, figsize=(14, 
                  fontsize=14, fontweight='bold')
     ax.grid(axis='x', alpha=0.3)
     
-    # Create legend - collect unique labels
+    # Create legend - collect unique labels in order
     legend_elements = []
     seen_labels = set()
     for stage_info in stages_info:
-        if len(stage_info) == 5:
-            # Old format
-            stage_name, _, _, color = stage_info[:4]
-            label = stage_name
-        else:
-            # New format - create separate entries for waiting and service
-            stage_name = stage_info[0]
-            waiting_color = stage_info[4]
-            service_color = stage_info[5]
-            
-            if waiting_color and f'{stage_name} (Waiting)' not in seen_labels:
-                legend_elements.append(mpatches.Patch(facecolor=waiting_color, alpha=0.6, 
-                                                     hatch='///', label=f'{stage_name} (Waiting)'))
-                seen_labels.add(f'{stage_name} (Waiting)')
-            
-            if service_color and f'{stage_name} (Service)' not in seen_labels:
-                legend_elements.append(mpatches.Patch(facecolor=service_color, alpha=0.8, 
-                                                     label=f'{stage_name} (Service)'))
-                seen_labels.add(f'{stage_name} (Service)')
-            continue
+        stage_name = stage_info[0]
+        waiting_color = stage_info[4]
+        service_color = stage_info[5]
         
-        # Add gap/waiting label if not already added
-        if 'Waiting/Gap (between stages)' not in seen_labels:
-            legend_elements.append(mpatches.Patch(facecolor='#FFD4B3', alpha=0.6, 
-                                                 edgecolor='black', hatch='///',
-                                                 label='Waiting/Gap (between stages)'))
-            seen_labels.add('Waiting/Gap (between stages)')
+        # Add waiting time entry if this stage has waiting
+        if waiting_color and f'{stage_name} (Waiting)' not in seen_labels:
+            legend_elements.append(mpatches.Patch(facecolor=waiting_color, alpha=0.6, 
+                                                 hatch='///', edgecolor='black', linewidth=0.5,
+                                                 label=f'{stage_name} (Waiting)'))
+            seen_labels.add(f'{stage_name} (Waiting)')
         
-        if label not in seen_labels:
-            legend_elements.append(mpatches.Patch(facecolor=color, alpha=0.8, label=label))
-            seen_labels.add(label)
+        # Add service time entry
+        if service_color and f'{stage_name} (Service)' not in seen_labels:
+            legend_elements.append(mpatches.Patch(facecolor=service_color, alpha=0.8, 
+                                                 edgecolor='black', linewidth=0.5,
+                                                 label=f'{stage_name} (Service)'))
+            seen_labels.add(f'{stage_name} (Service)')
+        
+        # For stages without waiting (like Authorization, Plan Prep), add a single entry
+        if not waiting_color and service_color and stage_name not in seen_labels:
+            legend_elements.append(mpatches.Patch(facecolor=service_color, alpha=0.8, 
+                                                 edgecolor='black', linewidth=0.5,
+                                                 label=stage_name))
+            seen_labels.add(stage_name)
     
     ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1, 1))
     
@@ -375,14 +294,6 @@ def plot_average_time_by_stage(permits: List[Permit], figsize=(10, 6)):
         # Stages without waiting (service only)
         'Authorization': '#4ECDC4',
         'Plan Preparation': '#45B7D1',
-        # Legacy names
-        'Debris Removal': '#FF6B6B',
-        'Planning': '#FFA07A',
-        'Public Works': '#98D8C8',
-        'Fire Review': '#F7DC6F',
-        'Public Health': '#BB8FCE',
-        'Miscellaneous': '#C08080',
-        'Waiting/Other': '#D3D3D3'
     }
     
     # Calculate averages - dynamically determine stages from data
@@ -489,12 +400,8 @@ def plot_time_by_segment(permits: List[Permit], figsize=(12, 6)):
         'Fire Review (Service)',
         'Public Health (Waiting)',
         'Public Health (Service)',
-        # Legacy names for backward compatibility
-        'Debris Removal',
-        'Planning',
-        'Public Works',
-        'Fire Review',
-        'Public Health',
+        'Miscellaneous (Waiting)',
+        'Miscellaneous (Service)',
     ]
     
     # Filter to only stages with data, maintaining preferred order
@@ -652,8 +559,8 @@ def visualize_all(permits: List[Permit], save_prefix: str = None):
         fig4.savefig(f"{save_prefix}_by_segment.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_by_segment.png")
     
-    # 5. Total time by segment
-    print("  Creating total time by segment chart...")
+    # 5. Total time by segment (box plot)
+    print("  Creating total time by segment chart (box plot)...")
     fig5, _ = plot_total_time_by_segment(permits)
     if save_prefix and fig5:
         fig5.savefig(f"{save_prefix}_total_time_by_segment.png", dpi=300, bbox_inches='tight')

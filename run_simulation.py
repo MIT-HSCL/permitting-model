@@ -166,9 +166,9 @@ def main():
                 "timestamps": {
                     "debris_removal_start": permit.debris_removal_request,
                     "debris_removal_end": permit.debris_removal_end,
-                    "authorization_start": permit.authorization_start,
+                    "authorization_start": permit.authorization_request,
                     "authorization_end": permit.authorization_end,
-                    "plan_prep_start": permit.plan_prep_start,
+                    "plan_prep_start": permit.plan_prep_request,
                     "plan_prep_end": permit.plan_prep_end,
                     "planning_start": permit.planning_request,
                     "planning_end": permit.planning_end,

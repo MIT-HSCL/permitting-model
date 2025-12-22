@@ -79,11 +79,11 @@ class PermitSimulation:
         # Resource pools
         self.epa_debris_servers = simpy.Resource(env, capacity=140)
         self.usace_debris_servers = simpy.Resource(env, capacity=140)
-        self.planning_servers = simpy.Resource(env, capacity=25)
-        self.public_works_servers = simpy.Resource(env, capacity=25)
-        self.fire_servers = simpy.Resource(env, capacity=25)
+        self.planning_servers = simpy.Resource(env, capacity=70)
+        self.public_works_servers = simpy.Resource(env, capacity=150)
+        self.fire_servers = simpy.Resource(env, capacity=50)
         self.public_health_servers = simpy.Resource(env, capacity=25)
-        self.misc_servers = simpy.Resource(env, capacity=25)
+        self.misc_servers = simpy.Resource(env, capacity=1000)
         
         # Statistics
         self.completed_permits: List[Permit] = []
