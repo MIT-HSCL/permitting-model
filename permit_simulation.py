@@ -45,8 +45,9 @@ class Permit:
     planning_end: Optional[float] = None
     # Public Works
     public_works_request: Optional[float] = None
-    public_works_service_start: Optional[float] = None
+    public_works_service_start: Optional[float] = None  # First service start (for waiting time calculation)
     public_works_end: Optional[float] = None
+    public_works_total_waiting: float = 0.0  # Cumulative waiting time across all checks/rechecks
     # Fire review
     fire_review_request: Optional[float] = None
     fire_review_service_start: Optional[float] = None
@@ -55,32 +56,15 @@ class Permit:
     public_health_request: Optional[float] = None
     public_health_service_start: Optional[float] = None
     public_health_end: Optional[float] = None
+    # Miscellaneous permits
+    misc_request: Optional[float] = None
+    misc_service_start: Optional[float] = None
+    misc_end: Optional[float] = None
     # Final
     ready_for_construction: Optional[float] = None
     # Tracking
     public_works_rechecks: int = 0
     public_works_approved: Optional[bool] = None
-    
-    # Legacy fields for backward compatibility (deprecated)
-    @property
-    def debris_removal_start(self):
-        return self.debris_removal_request
-    
-    @property
-    def planning_start(self):
-        return self.planning_request
-    
-    @property
-    def public_works_start(self):
-        return self.public_works_request
-    
-    @property
-    def fire_review_start(self):
-        return self.fire_review_request
-    
-    @property
-    def public_health_start(self):
-        return self.public_health_request
 
 
 class PermitSimulation:
@@ -99,6 +83,7 @@ class PermitSimulation:
         self.public_works_servers = simpy.Resource(env, capacity=25)
         self.fire_servers = simpy.Resource(env, capacity=25)
         self.public_health_servers = simpy.Resource(env, capacity=25)
+        self.misc_servers = simpy.Resource(env, capacity=25)
         
         # Statistics
         self.completed_permits: List[Permit] = []
@@ -195,15 +180,32 @@ class PermitSimulation:
             yield request
             permit.planning_service_start = self.env.now
             
-            # Segments 2 & 4 (non-like-for-like) - N(33, 10) days
+            # Segments 2 & 4 (non-like-for-like) - N(9, 2) days
             # Segments 1 & 3 (like-for-like) - N(3, 1) days
             if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE]:
-                duration_days = self.sample_normal(33, 10)
+                duration_days = self.sample_normal(9, 2)
             else:  # Segments 1 & 3
                 duration_days = self.sample_normal(3, 1)
             
             yield self.env.timeout(duration_days)
         permit.planning_end = self.env.now
+
+    def misc_permits(self, permit: Permit):
+        """Miscellaneous permits administered by various other departments.
+        Segments 1, 3, and 5 (like-for-like) skip this step entirely.
+        """
+        if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.CUSTOM_LIKE, Segment.SELF_CERT_LIKE]:
+            # Skip miscellaneous permits if like-for-like
+            return
+        
+        permit.misc_request = self.env.now
+        with self.misc_servers.request() as request:
+            yield request
+            permit.misc_service_start = self.env.now
+            # lognormal 30, sigma 0.7 days days
+            duration_days = self.sample_lognormal(30, 0.7)
+            yield self.env.timeout(duration_days)
+        permit.misc_end = self.env.now
     
     def public_works_initial_check(self, permit: Permit):
         """Public works (Building & Safety) Initial Check.
@@ -216,9 +218,12 @@ class PermitSimulation:
             return
         
         permit.public_works_request = self.env.now
+        request_time = self.env.now
         with self.public_works_servers.request() as request:
             yield request
-            permit.public_works_service_start = self.env.now
+            service_start_time = self.env.now
+            permit.public_works_service_start = service_start_time  # Track first service start
+            permit.public_works_total_waiting += (service_start_time - request_time)  # Track cumulative waiting
             # N(11.6, 2) days
             duration_days = self.sample_normal(11.6, 2)
             yield self.env.timeout(duration_days)
@@ -234,11 +239,12 @@ class PermitSimulation:
     
     def public_works_recheck(self, permit: Permit):
         """Public works (Building & Safety) Re-check."""
-        # Note: We don't track individual re-check waiting times separately
-        # The public_works_service_start is updated when service begins
+        # Track waiting time for this recheck (adds to cumulative waiting)
+        request_time = self.env.now
         with self.public_works_servers.request() as request:
             yield request
-            permit.public_works_service_start = self.env.now  # Update service start time
+            service_start_time = self.env.now
+            permit.public_works_total_waiting += (service_start_time - request_time)  # Add recheck waiting time
             # N(8.3, 2) days
             duration_days = self.sample_normal(8.3, 2)
             yield self.env.timeout(duration_days)
@@ -288,6 +294,10 @@ class PermitSimulation:
         
         # Planning department (skipped for segments 5&6)
         yield self.env.process(self.planning_department(permit))
+        
+        # Miscellaneous permits (for non-like-for-like segments 2, 4, 6)
+        # Runs sequentially between planning and public works
+        yield self.env.process(self.misc_permits(permit))
         
         # Public Works (Building & Safety)
         # Pre-approved plans skip initial check
