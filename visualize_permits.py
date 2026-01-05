@@ -18,40 +18,52 @@ def calculate_stage_times(permit: Permit) -> dict:
     stages = {}
     
     # Debris removal (EPA + USACE) - separate waiting and service
-    if permit.debris_removal_request and permit.debris_removal_service_start and permit.debris_removal_end:
+    if (permit.debris_removal_request is not None and 
+        permit.debris_removal_service_start is not None and 
+        permit.debris_removal_end is not None):
         stages['Debris Removal (Waiting)'] = permit.debris_removal_service_start - permit.debris_removal_request
         stages['Debris Removal (Service)'] = permit.debris_removal_end - permit.debris_removal_service_start
     
     # Authorization (no waiting, just service time)
-    if permit.authorization_start and permit.authorization_end:
+    if permit.authorization_start is not None and permit.authorization_end is not None:
         stages['Authorization'] = permit.authorization_end - permit.authorization_start
     
     # Plan preparation (no waiting, just service time)
-    if permit.plan_prep_start and permit.plan_prep_end:
+    if permit.plan_prep_start is not None and permit.plan_prep_end is not None:
         stages['Plan Preparation'] = permit.plan_prep_end - permit.plan_prep_start
     
     # Planning department - separate waiting and service
-    if permit.planning_request and permit.planning_service_start and permit.planning_end:
+    if (permit.planning_request is not None and 
+        permit.planning_service_start is not None and 
+        permit.planning_end is not None):
         stages['Planning (Waiting)'] = permit.planning_service_start - permit.planning_request
         stages['Planning (Service)'] = permit.planning_end - permit.planning_service_start
     
     # Public Works - separate waiting and service
-    if permit.public_works_request and permit.public_works_service_start and permit.public_works_end:
+    if (permit.public_works_request is not None and 
+        permit.public_works_service_start is not None and 
+        permit.public_works_end is not None):
         stages['Public Works (Waiting)'] = permit.public_works_service_start - permit.public_works_request
         stages['Public Works (Service)'] = permit.public_works_end - permit.public_works_service_start
     
     # Fire review - separate waiting and service
-    if permit.fire_review_request and permit.fire_review_service_start and permit.fire_review_end:
+    if (permit.fire_review_request is not None and 
+        permit.fire_review_service_start is not None and 
+        permit.fire_review_end is not None):
         stages['Fire Review (Waiting)'] = permit.fire_review_service_start - permit.fire_review_request
         stages['Fire Review (Service)'] = permit.fire_review_end - permit.fire_review_service_start
     
     # Public Health review - separate waiting and service
-    if permit.public_health_request and permit.public_health_service_start and permit.public_health_end:
+    if (permit.public_health_request is not None and 
+        permit.public_health_service_start is not None and 
+        permit.public_health_end is not None):
         stages['Public Health (Waiting)'] = permit.public_health_service_start - permit.public_health_request
         stages['Public Health (Service)'] = permit.public_health_end - permit.public_health_service_start
     
     # Miscellaneous permits - separate waiting and service
-    if permit.misc_request and permit.misc_service_start and permit.misc_end:
+    if (permit.misc_request is not None and 
+        permit.misc_service_start is not None and 
+        permit.misc_end is not None):
         stages['Miscellaneous (Waiting)'] = permit.misc_service_start - permit.misc_request
         stages['Miscellaneous (Service)'] = permit.misc_end - permit.misc_service_start
     
@@ -133,9 +145,13 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
     bottom = np.zeros(len(display_permits))
     bars = []
     
+    # Always include key stages even if they have zeros (for visibility)
+    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
+    
     for stage in stage_order:
         values = stage_data[stage]
-        if any(v > 0 for v in values):  # Only plot if there are non-zero values
+        # Plot if there are non-zero values OR if it's a key stage (to ensure visibility)
+        if any(v > 0 for v in values) or stage in key_stages:
             bar = ax.bar(permit_ids, values, bottom=bottom, 
                         label=stage, color=colors[stage], alpha=0.8)
             bottom += values
@@ -309,8 +325,9 @@ def plot_average_time_by_stage(permits: List[Permit], figsize=(10, 6)):
     stage_averages = {stage: np.mean(values) if values else 0 
                       for stage, values in stage_totals.items()}
     
-    # Filter out stages with zero average
-    stage_averages = {k: v for k, v in stage_averages.items() if v > 0}
+    # Filter out stages with zero average, but always include key stages
+    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
+    stage_averages = {k: v for k, v in stage_averages.items() if v > 0 or k in key_stages}
     
     # Create bar chart
     fig, ax = plt.subplots(figsize=figsize)
@@ -405,7 +422,9 @@ def plot_time_by_segment(permits: List[Permit], figsize=(12, 6)):
     ]
     
     # Filter to only stages with data, maintaining preferred order
-    stage_order = [s for s in preferred_order if s in all_stages]
+    # Always include key stages even if they don't appear in all_stages (for consistency)
+    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
+    stage_order = [s for s in preferred_order if s in all_stages or s in key_stages]
     # Add any remaining stages not in preferred order
     for stage in sorted(all_stages):
         if stage not in stage_order:

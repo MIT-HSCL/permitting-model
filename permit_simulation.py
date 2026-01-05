@@ -79,7 +79,7 @@ class PermitSimulation:
         # Resource pools
         self.epa_debris_servers = simpy.Resource(env, capacity=140)
         self.usace_debris_servers = simpy.Resource(env, capacity=140)
-        self.planning_servers = simpy.Resource(env, capacity=70)
+        self.planning_servers = simpy.Resource(env, capacity=125)  # 25 servers × 5 permits each
         self.public_works_servers = simpy.Resource(env, capacity=150)
         self.fire_servers = simpy.Resource(env, capacity=50)
         self.public_health_servers = simpy.Resource(env, capacity=25)
@@ -133,17 +133,18 @@ class PermitSimulation:
             # Uniform: 2 or 3 days, each with 50% probability
             duration = self.sample_uniform_days()
             yield self.env.timeout(duration)
-        permit.debris_removal_end = self.env.now
+        # Note: debris_removal_end will be set after USACE completes
     
     def usace_debris_removal(self, permit: Permit):
         """USACE Debris Removal (Phase 2)."""
-        # Note: We track EPA debris removal timing, USACE follows immediately after
-        # so we don't need separate request/service tracking for USACE
+        # USACE follows immediately after EPA
         with self.usace_debris_servers.request() as request:
             yield request
             # Uniform: 2 or 3 days, each with 50% probability
             duration = self.sample_uniform_days()
             yield self.env.timeout(duration)
+        # Set end time after both EPA and USACE phases complete
+        permit.debris_removal_end = self.env.now
     
     def securing_authorization(self, permit: Permit):
         """Securing authorization & funding to rebuild."""

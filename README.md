@@ -124,7 +124,7 @@ The simulation provides:
 
 - EPA Debris Removal: 140 servers (1400 people in 5-person crews)
 - USACE Debris Removal: 140 servers (1400 people in 5-person crews)
-- Planning Department: 25 servers
+- Planning Department: 125 capacity (25 servers × 5 permits caseload each)
 - Public Works: 25 servers
 - Fire Department: 25 servers
 - Public Health: 25 servers
