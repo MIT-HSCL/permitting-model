@@ -79,7 +79,7 @@ class PermitSimulation:
         # Resource pools
         self.epa_debris_servers = simpy.Resource(env, capacity=140)
         self.usace_debris_servers = simpy.Resource(env, capacity=140)
-        self.planning_servers = simpy.Resource(env, capacity=125)  # 25 servers × 5 permits each
+        self.planning_servers = simpy.Resource(env, capacity=100)  # 20 servers × 5 permits each
         self.public_works_servers = simpy.Resource(env, capacity=150)
         self.fire_servers = simpy.Resource(env, capacity=50)
         self.public_health_servers = simpy.Resource(env, capacity=25)
@@ -300,35 +300,39 @@ class PermitSimulation:
         # Runs sequentially between planning and public works
         yield self.env.process(self.misc_permits(permit))
         
+        # Parallel processes: Building & Safety (Public Works), Fire Review, and Public Health Review
+        parallel_processes = []
+        
         # Public Works (Building & Safety)
-        # Pre-approved plans skip initial check
         if permit.segment not in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
-            yield self.env.process(self.public_works_initial_check(permit))
-            
-            # Re-check loop if not approved
-            while not permit.public_works_approved:
-                yield self.env.process(self.public_works_recheck(permit))
+            # Non-pre-approved plans: create a process that handles initial check and re-checks
+            def public_works_process():
+                yield self.env.process(self.public_works_initial_check(permit))
+                # Re-check loop if not approved
+                while not permit.public_works_approved:
+                    yield self.env.process(self.public_works_recheck(permit))
+            parallel_processes.append(self.env.process(public_works_process()))
         else:
             # Pre-approved plans are automatically approved (no waiting, instant)
-            permit.public_works_request = self.env.now
-            permit.public_works_service_start = self.env.now
-            permit.public_works_end = self.env.now
-            permit.public_works_approved = True
-        
-        # Parallel reviews after approval
-        review_processes = []
+            def public_works_instant():
+                permit.public_works_request = self.env.now
+                permit.public_works_service_start = self.env.now
+                permit.public_works_end = self.env.now
+                permit.public_works_approved = True
+                yield self.env.timeout(0)  # Yield to make it a proper generator
+            parallel_processes.append(self.env.process(public_works_instant()))
         
         # Fire review: 30% of permits
         if random.random() < 0.30:
-            review_processes.append(self.env.process(self.fire_review(permit)))
+            parallel_processes.append(self.env.process(self.fire_review(permit)))
         
         # Public Health review: 1.3% of permits
         if random.random() < 0.013:
-            review_processes.append(self.env.process(self.public_health_review(permit)))
+            parallel_processes.append(self.env.process(self.public_health_review(permit)))
         
-        # Wait for all reviews to complete
-        if review_processes:
-            yield simpy.AllOf(self.env, review_processes)
+        # Wait for all parallel processes to complete
+        if parallel_processes:
+            yield simpy.AllOf(self.env, parallel_processes)
         
         # Ready for construction
         permit.ready_for_construction = self.env.now
