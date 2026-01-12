@@ -80,8 +80,8 @@ class PermitSimulation:
         self.epa_debris_servers = simpy.Resource(env, capacity=140)
         self.usace_debris_servers = simpy.Resource(env, capacity=140)
         self.planning_servers = simpy.Resource(env, capacity=100)  # 20 servers × 5 permits each
-        self.public_works_servers = simpy.Resource(env, capacity=150)
-        self.fire_servers = simpy.Resource(env, capacity=50)
+        self.public_works_servers = simpy.Resource(env, capacity=200) # 40 servers x 5 permits each
+        self.fire_servers = simpy.Resource(env, capacity=100)
         self.public_health_servers = simpy.Resource(env, capacity=25)
         self.misc_servers = simpy.Resource(env, capacity=1000)
         
@@ -260,13 +260,20 @@ class PermitSimulation:
             permit.public_works_rechecks += 1
     
     def fire_review(self, permit: Permit):
-        """Fire department review (30% of permits, low confidence)."""
+        """Fire department review (all permits).
+        70% take ~1 day, 30% take ~13 days.
+        """
         permit.fire_review_request = self.env.now
         with self.fire_servers.request() as request:
             yield request
             permit.fire_review_service_start = self.env.now
-            # N(13, 2) days
-            duration_days = self.sample_normal(13, 2)
+            # 70% take ~1 day, 30% take ~13 days
+            if random.random() < 0.70:
+                # Quick review: ~1 day (normal distribution around 1 day)
+                duration_days = self.sample_normal(1, 0.2)
+            else:
+                # Detailed review: ~13 days (normal distribution around 13 days)
+                duration_days = self.sample_normal(13, 2)
             yield self.env.timeout(duration_days)
         permit.fire_review_end = self.env.now
     
@@ -322,9 +329,8 @@ class PermitSimulation:
                 yield self.env.timeout(0)  # Yield to make it a proper generator
             parallel_processes.append(self.env.process(public_works_instant()))
         
-        # Fire review: 30% of permits
-        if random.random() < 0.30:
-            parallel_processes.append(self.env.process(self.fire_review(permit)))
+        # Fire review: all permits go through fire review
+        parallel_processes.append(self.env.process(self.fire_review(permit)))
         
         # Public Health review: 1.3% of permits
         if random.random() < 0.013:

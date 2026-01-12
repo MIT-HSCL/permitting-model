@@ -442,12 +442,12 @@ def plot_time_by_segment(permits: List[Permit], figsize=(12, 6)):
     multiplier = 0
     
     colors_map = {
-        Segment.PRE_APPROVED_LIKE: '#FF6B6B',
-        Segment.PRE_APPROVED_NON_LIKE: '#FF8E8E',
-        Segment.CUSTOM_LIKE: '#4ECDC4',
-        Segment.CUSTOM_NON_LIKE: '#6EDDD6',
-        Segment.SELF_CERT_LIKE: '#45B7D1',
-        Segment.SELF_CERT_NON_LIKE: '#6BC5D8',
+        Segment.PRE_APPROVED_LIKE: '#2E7D32',
+        Segment.PRE_APPROVED_NON_LIKE: '#81C784',
+        Segment.CUSTOM_LIKE: '#1565C0',
+        Segment.CUSTOM_NON_LIKE: '#90CAF9',
+        Segment.SELF_CERT_LIKE: '#EF6C00',
+        Segment.SELF_CERT_NON_LIKE: '#FFB74D',
     }
     
     for segment, data in segment_data.items():
@@ -463,6 +463,234 @@ def plot_time_by_segment(permits: List[Permit], figsize=(12, 6)):
     ax.set_xlabel('Process Stage', fontsize=12)
     ax.set_ylabel('Average Time (days)', fontsize=12)
     ax.set_title('Average Time per Stage by Permit Segment', fontsize=14, fontweight='bold')
+    ax.set_xticks(x + width * (multiplier - 1) / 2 if multiplier > 0 else x)
+    ax.set_xticklabels(stage_order, rotation=45, ha='right')
+    ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    ax.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    
+    return fig, ax
+
+
+def plot_time_by_segment_like_for_like(permits: List[Permit], figsize=(12, 6)):
+    """
+    Create a grouped bar chart showing average time per stage for Like-for-like segments only.
+    Includes: PRE_APPROVED_LIKE, CUSTOM_LIKE, SELF_CERT_LIKE
+    
+    Args:
+        permits: List of Permit objects
+        figsize: Figure size tuple
+    """
+    from permit_simulation import Segment
+    
+    # Filter to only like-for-like segments
+    like_for_like_segments = [Segment.PRE_APPROVED_LIKE, Segment.CUSTOM_LIKE, Segment.SELF_CERT_LIKE]
+    filtered_permits = [p for p in permits if p.segment in like_for_like_segments]
+    
+    if not filtered_permits:
+        print("Warning: No like-for-like permits found")
+        return None, None
+    
+    # Group permits by segment
+    segment_permits = {segment: [] for segment in like_for_like_segments}
+    for permit in filtered_permits:
+        segment_permits[permit.segment].append(permit)
+    
+    # Calculate averages per segment - collect all stages dynamically
+    segment_data = {}
+    all_stages = set()
+    
+    for segment, seg_permits in segment_permits.items():
+        if not seg_permits:
+            continue
+        
+        # Collect all stages that appear in the data
+        stage_totals = {}
+        for permit in seg_permits:
+            stages = calculate_stage_times(permit)
+            for stage_name, duration in stages.items():
+                all_stages.add(stage_name)
+                if stage_name not in stage_totals:
+                    stage_totals[stage_name] = []
+                stage_totals[stage_name].append(duration)
+        
+        segment_data[segment] = {
+            stage: np.mean(values) if values else 0
+            for stage, values in stage_totals.items()
+        }
+    
+    # Define preferred order for display
+    preferred_order = [
+        'Debris Removal (Waiting)',
+        'Debris Removal (Service)',
+        'Authorization',
+        'Plan Preparation',
+        'Planning (Waiting)',
+        'Planning (Service)',
+        'Public Works (Waiting)',
+        'Public Works (Service)',
+        'Fire Review (Waiting)',
+        'Fire Review (Service)',
+        'Public Health (Waiting)',
+        'Public Health (Service)',
+        'Miscellaneous (Waiting)',
+        'Miscellaneous (Service)',
+    ]
+    
+    # Filter to only stages with data, maintaining preferred order
+    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
+    stage_order = [s for s in preferred_order if s in all_stages or s in key_stages]
+    # Add any remaining stages not in preferred order
+    for stage in sorted(all_stages):
+        if stage not in stage_order:
+            stage_order.append(stage)
+    
+    if not stage_order:
+        print("Warning: No stage data found for any segment")
+        return None, None
+    
+    # Create grouped bar chart
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    x = np.arange(len(stage_order))
+    width = 0.25
+    multiplier = 0
+    
+    colors_map = {
+        Segment.PRE_APPROVED_LIKE: '#2E7D32',
+        Segment.CUSTOM_LIKE: '#1565C0',
+        Segment.SELF_CERT_LIKE: '#EF6C00',
+    }
+    
+    for segment in like_for_like_segments:
+        if segment not in segment_data or not any(segment_data[segment].values()):
+            continue
+        
+        data = segment_data[segment]
+        offset = width * multiplier
+        values = [data.get(stage, 0) for stage in stage_order]
+        bars = ax.bar(x + offset, values, width, label=segment.name, 
+                     color=colors_map.get(segment, '#D3D3D3'), alpha=0.8)
+        multiplier += 1
+    
+    ax.set_xlabel('Process Stage', fontsize=12)
+    ax.set_ylabel('Average Time (days)', fontsize=12)
+    ax.set_title('Average Time per Stage by Permit Segment (Like-for-like Only)', fontsize=14, fontweight='bold')
+    ax.set_xticks(x + width * (multiplier - 1) / 2 if multiplier > 0 else x)
+    ax.set_xticklabels(stage_order, rotation=45, ha='right')
+    ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    ax.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    
+    return fig, ax
+
+
+def plot_time_by_segment_non_like_for_like(permits: List[Permit], figsize=(12, 6)):
+    """
+    Create a grouped bar chart showing average time per stage for Non-like-for-like segments only.
+    Includes: PRE_APPROVED_NON_LIKE, CUSTOM_NON_LIKE, SELF_CERT_NON_LIKE
+    
+    Args:
+        permits: List of Permit objects
+        figsize: Figure size tuple
+    """
+    from permit_simulation import Segment
+    
+    # Filter to only non-like-for-like segments
+    non_like_for_like_segments = [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]
+    filtered_permits = [p for p in permits if p.segment in non_like_for_like_segments]
+    
+    if not filtered_permits:
+        print("Warning: No non-like-for-like permits found")
+        return None, None
+    
+    # Group permits by segment
+    segment_permits = {segment: [] for segment in non_like_for_like_segments}
+    for permit in filtered_permits:
+        segment_permits[permit.segment].append(permit)
+    
+    # Calculate averages per segment - collect all stages dynamically
+    segment_data = {}
+    all_stages = set()
+    
+    for segment, seg_permits in segment_permits.items():
+        if not seg_permits:
+            continue
+        
+        # Collect all stages that appear in the data
+        stage_totals = {}
+        for permit in seg_permits:
+            stages = calculate_stage_times(permit)
+            for stage_name, duration in stages.items():
+                all_stages.add(stage_name)
+                if stage_name not in stage_totals:
+                    stage_totals[stage_name] = []
+                stage_totals[stage_name].append(duration)
+        
+        segment_data[segment] = {
+            stage: np.mean(values) if values else 0
+            for stage, values in stage_totals.items()
+        }
+    
+    # Define preferred order for display
+    preferred_order = [
+        'Debris Removal (Waiting)',
+        'Debris Removal (Service)',
+        'Authorization',
+        'Plan Preparation',
+        'Planning (Waiting)',
+        'Planning (Service)',
+        'Public Works (Waiting)',
+        'Public Works (Service)',
+        'Fire Review (Waiting)',
+        'Fire Review (Service)',
+        'Public Health (Waiting)',
+        'Public Health (Service)',
+        'Miscellaneous (Waiting)',
+        'Miscellaneous (Service)',
+    ]
+    
+    # Filter to only stages with data, maintaining preferred order
+    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
+    stage_order = [s for s in preferred_order if s in all_stages or s in key_stages]
+    # Add any remaining stages not in preferred order
+    for stage in sorted(all_stages):
+        if stage not in stage_order:
+            stage_order.append(stage)
+    
+    if not stage_order:
+        print("Warning: No stage data found for any segment")
+        return None, None
+    
+    # Create grouped bar chart
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    x = np.arange(len(stage_order))
+    width = 0.25
+    multiplier = 0
+    
+    colors_map = {
+        Segment.PRE_APPROVED_NON_LIKE: '#81C784',
+        Segment.CUSTOM_NON_LIKE: '#90CAF9',
+        Segment.SELF_CERT_NON_LIKE: '#FFB74D',
+    }
+    
+    for segment in non_like_for_like_segments:
+        if segment not in segment_data or not any(segment_data[segment].values()):
+            continue
+        
+        data = segment_data[segment]
+        offset = width * multiplier
+        values = [data.get(stage, 0) for stage in stage_order]
+        bars = ax.bar(x + offset, values, width, label=segment.name, 
+                     color=colors_map.get(segment, '#D3D3D3'), alpha=0.8)
+        multiplier += 1
+    
+    ax.set_xlabel('Process Stage', fontsize=12)
+    ax.set_ylabel('Average Time (days)', fontsize=12)
+    ax.set_title('Average Time per Stage by Permit Segment (Non-like-for-like Only)', fontsize=14, fontweight='bold')
     ax.set_xticks(x + width * (multiplier - 1) / 2 if multiplier > 0 else x)
     ax.set_xticklabels(stage_order, rotation=45, ha='right')
     ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
@@ -509,7 +737,7 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
                         medianprops={'color': 'red'}, meanprops={'marker': 'o', 'markeredgecolor': 'black', 'markerfacecolor': 'green'})
         
         # Add colors to box plots
-        colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#BB8FCE']
+        colors = ['#2E7D32', '#81C784', '#1565C0', '#90CAF9', '#EF6C00', '#FFB74D']
         for patch, color in zip(bp['boxes'], colors[:len(segments)]):
             patch.set_facecolor(color)
         
@@ -519,6 +747,12 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
             y_pos = np.median(data[i])  # Position near the median
             ax.text(i + 1, np.max(data[i]) + 0.05 * (np.max(data[i]) - np.min(data[i])), f'n={count}',
                     horizontalalignment='center', verticalalignment='bottom', fontsize=9, color='gray')
+        
+        # Add dashed reference lines for 1 year and 2 years
+        one_year = 365
+        two_years = 730
+        ax.axhline(y=one_year, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label='1 Year')
+        ax.axhline(y=two_years, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label='2 Years')
         
         ax.set_ylabel('Total Time (days)', fontsize=12)
         ax.set_title('Total Time from Disaster to Construction Start by Segment (Box Plot)', fontsize=14, fontweight='bold')
@@ -571,12 +805,26 @@ def visualize_all(permits: List[Permit], save_prefix: str = None):
         fig3.savefig(f"{save_prefix}_average_by_stage.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_average_by_stage.png")
     
-    # 4. Time by segment
+    # 4. Time by segment (all segments)
     print("  Creating time by segment chart...")
     fig4, _ = plot_time_by_segment(permits)
     if save_prefix:
         fig4.savefig(f"{save_prefix}_by_segment.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_by_segment.png")
+    
+    # 5. Time by segment - Like-for-like only
+    print("  Creating time by segment chart (Like-for-like only)...")
+    fig5, _ = plot_time_by_segment_like_for_like(permits)
+    if save_prefix and fig5:
+        fig5.savefig(f"{save_prefix}_by_segment_like_for_like.png", dpi=300, bbox_inches='tight')
+        print(f"    Saved: {save_prefix}_by_segment_like_for_like.png")
+    
+    # 6. Time by segment - Non-like-for-like only
+    print("  Creating time by segment chart (Non-like-for-like only)...")
+    fig6, _ = plot_time_by_segment_non_like_for_like(permits)
+    if save_prefix and fig6:
+        fig6.savefig(f"{save_prefix}_by_segment_non_like_for_like.png", dpi=300, bbox_inches='tight')
+        print(f"    Saved: {save_prefix}_by_segment_non_like_for_like.png")
     
     # 5. Total time by segment (box plot)
     print("  Creating total time by segment chart (box plot)...")

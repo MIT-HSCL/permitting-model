@@ -97,8 +97,10 @@ To customize the simulation behavior, edit `permit_simulation.py`:
 ### Parallel Reviews (After Approval)
 
 - **Fire Department Review**:
-  - 30% of permits
-  - Processing time: Normal distribution N(13, 2) days
+  - All permits (100%)
+  - Processing time:
+    - 70%: Quick review ~1 day (Normal distribution N(1, 0.2) days)
+    - 30%: Detailed review ~13 days (Normal distribution N(13, 2) days)
 
 - **Public Health Review**:
   - 1.3% of permits
