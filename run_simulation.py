@@ -12,7 +12,8 @@ def run_simulation(
     num_permits: int = 100,
     simulation_duration: float = None,
     random_seed: int = 42,
-    inter_arrival_time: float = 1.0  # days between permit arrivals
+    inter_arrival_time: float = 1.0,  # days between permit arrivals
+    sequential: bool = False
 ):
     """
     Run the permit simulation.
@@ -22,6 +23,7 @@ def run_simulation(
         simulation_duration: Maximum simulation time in days (if None, runs until all permits complete)
         random_seed: Random seed for reproducibility
         inter_arrival_time: Average time between permit arrivals (days)
+        sequential: If True, uses sequential processing; if False, uses parallel processing (default)
     """
     env = simpy.Environment()
     sim = PermitSimulation(env, random_seed=random_seed)
@@ -38,7 +40,11 @@ def run_simulation(
                     break
             
             permit = sim.create_permit()
-            env.process(sim.permit_process(permit))
+            # Use sequential or parallel processing based on parameter
+            if sequential:
+                env.process(sim.permit_process_sequential(permit))
+            else:
+                env.process(sim.permit_process(permit))
             count += 1
             
             # Exponential inter-arrival time

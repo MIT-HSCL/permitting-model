@@ -43,28 +43,32 @@ class Permit:
     planning_request: Optional[float] = None
     planning_service_start: Optional[float] = None
     planning_end: Optional[float] = None
+    planning_total_waiting: float = 0.0  # Cumulative waiting time across all rereviews
+    planning_rechecks: int = 0
     # Public Works
     public_works_request: Optional[float] = None
     public_works_service_start: Optional[float] = None  # First service start (for waiting time calculation)
     public_works_end: Optional[float] = None
     public_works_total_waiting: float = 0.0  # Cumulative waiting time across all checks/rechecks
+    public_works_rechecks: int = 0
     # Fire review
     fire_review_request: Optional[float] = None
     fire_review_service_start: Optional[float] = None
     fire_review_end: Optional[float] = None
+    fire_review_total_waiting: float = 0.0  # Cumulative waiting time across all rereviews
+    fire_rechecks: int = 0
     # Public Health review
     public_health_request: Optional[float] = None
     public_health_service_start: Optional[float] = None
     public_health_end: Optional[float] = None
+    public_health_total_waiting: float = 0.0  # Cumulative waiting time across all rereviews
+    public_health_rechecks: int = 0
     # Miscellaneous permits
     misc_request: Optional[float] = None
     misc_service_start: Optional[float] = None
     misc_end: Optional[float] = None
     # Final
     ready_for_construction: Optional[float] = None
-    # Tracking
-    public_works_rechecks: int = 0
-    public_works_approved: Optional[bool] = None
 
 
 class PermitSimulation:
@@ -79,10 +83,10 @@ class PermitSimulation:
         # Resource pools
         self.epa_debris_servers = simpy.Resource(env, capacity=140)
         self.usace_debris_servers = simpy.Resource(env, capacity=140)
-        self.planning_servers = simpy.Resource(env, capacity=100)  # 20 servers × 5 permits each
-        self.public_works_servers = simpy.Resource(env, capacity=200) # 40 servers x 5 permits each
-        self.fire_servers = simpy.Resource(env, capacity=100)
-        self.public_health_servers = simpy.Resource(env, capacity=25)
+        self.planning_servers = simpy.PriorityResource(env, capacity=100)  # 20 servers × 5 permits each
+        self.public_works_servers = simpy.PriorityResource(env, capacity=200) # 40 servers x 5 permits each
+        self.fire_servers = simpy.PriorityResource(env, capacity=100)
+        self.public_health_servers = simpy.PriorityResource(env, capacity=25)
         self.misc_servers = simpy.Resource(env, capacity=1000)
         
         # Statistics
@@ -208,56 +212,46 @@ class PermitSimulation:
             yield self.env.timeout(duration_days)
         permit.misc_end = self.env.now
     
-    def public_works_initial_check(self, permit: Permit):
+    def public_works(self, permit: Permit):
         """Public works (Building & Safety) Initial Check.
-        Only segments 3-6 (non-pre-approved) go through this step.
+        Segments 3-6 (non-pre-approved) take longer.
         Sets permit.public_works_approved to True if approved, False if needs re-check.
         """
-        if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
-            # Pre-approved plans skip initial check
-            permit.public_works_approved = True
-            return
         
         permit.public_works_request = self.env.now
         request_time = self.env.now
-        with self.public_works_servers.request() as request:
+
+        priority = 0 if permit.public_works_rechecks == 0 else 1
+        with self.public_works_servers.request(priority=priority) as request:
             yield request
             service_start_time = self.env.now
-            permit.public_works_service_start = service_start_time  # Track first service start
+            if permit.public_works_rechecks == 0:
+                permit.public_works_service_start = service_start_time  # Track first service start
             permit.public_works_total_waiting += (service_start_time - request_time)  # Track cumulative waiting
-            # N(11.6, 2) days
+            # N(11.6, 2) days for non-pre-approved plans
+            # N(4, 1) days for pre-approved plans
             duration_days = self.sample_normal(11.6, 2)
-            yield self.env.timeout(duration_days)
+            duration_days_pre_approved = self.sample_normal(4, 1)
+            if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
+                yield self.env.timeout(duration_days_pre_approved)
+            else:
+                yield self.env.timeout(duration_days)
         
-        # 75% approved, 25% need re-check
-        approved = random.random() < 0.75
-        permit.public_works_approved = approved
-        
-        if approved:
-            permit.public_works_end = self.env.now
+        if permit.public_works_rechecks == 0:
+            # 25% approved, 75% need re-check
+            approved = random.random() < 0.25
+            if approved:
+                permit.public_works_end = self.env.now
+            else:
+                permit.public_works_rechecks += 1
         else:
-            permit.public_works_rechecks += 1
-    
-    def public_works_recheck(self, permit: Permit):
-        """Public works (Building & Safety) Re-check."""
-        # Track waiting time for this recheck (adds to cumulative waiting)
-        request_time = self.env.now
-        with self.public_works_servers.request() as request:
-            yield request
-            service_start_time = self.env.now
-            permit.public_works_total_waiting += (service_start_time - request_time)  # Add recheck waiting time
-            # N(8.3, 2) days
-            duration_days = self.sample_normal(8.3, 2)
-            yield self.env.timeout(duration_days)
-        
-        # 75% approved, 25% need re-check again
-        approved = random.random() < 0.75
-        permit.public_works_approved = approved
-        
-        if approved:
-            permit.public_works_end = self.env.now
-        else:
-            permit.public_works_rechecks += 1
+            # 90% approved, 10% need re-check if has already been rechecked
+            approved = random.random() < 0.9
+            if approved:
+                permit.public_works_end = self.env.now
+            else:
+                permit.public_works_rechecks += 1
+
     
     def fire_review(self, permit: Permit):
         """Fire department review (all permits).
@@ -311,23 +305,7 @@ class PermitSimulation:
         parallel_processes = []
         
         # Public Works (Building & Safety)
-        if permit.segment not in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
-            # Non-pre-approved plans: create a process that handles initial check and re-checks
-            def public_works_process():
-                yield self.env.process(self.public_works_initial_check(permit))
-                # Re-check loop if not approved
-                while not permit.public_works_approved:
-                    yield self.env.process(self.public_works_recheck(permit))
-            parallel_processes.append(self.env.process(public_works_process()))
-        else:
-            # Pre-approved plans are automatically approved (no waiting, instant)
-            def public_works_instant():
-                permit.public_works_request = self.env.now
-                permit.public_works_service_start = self.env.now
-                permit.public_works_end = self.env.now
-                permit.public_works_approved = True
-                yield self.env.timeout(0)  # Yield to make it a proper generator
-            parallel_processes.append(self.env.process(public_works_instant()))
+        parallel_processes.append(self.env.process(self.public_works(permit)))
         
         # Fire review: all permits go through fire review
         parallel_processes.append(self.env.process(self.fire_review(permit)))
@@ -339,6 +317,40 @@ class PermitSimulation:
         # Wait for all parallel processes to complete
         if parallel_processes:
             yield simpy.AllOf(self.env, parallel_processes)
+        
+        # Ready for construction
+        permit.ready_for_construction = self.env.now
+        self.completed_permits.append(permit)
+        if permit.permit_id in self.in_progress_permits:
+            del self.in_progress_permits[permit.permit_id]
+    
+    def permit_process_sequential(self, permit: Permit):
+        """Alternative process flow for a single permit with no parallelism.
+
+        This runs each major step one after the other, so you can directly
+        compare a fully sequential workflow to the original parallel one.
+        """
+        # Debris removal first (EPA → USACE)
+        yield self.env.process(self.debris_removal_path(permit))
+        
+        # Then authorization and plan preparation
+        yield self.env.process(self.authorization_path(permit))
+        
+        # Planning department (skipped for segments 5&6)
+        yield self.env.process(self.planning_department(permit))
+        
+        # Miscellaneous permits (for non-like-for-like segments 2, 4, 6)
+        yield self.env.process(self.misc_permits(permit))
+        
+        # Building & Safety (Public Works)
+        yield self.env.process(self.public_works(permit))
+        
+        # Fire review: all permits go through fire review (sequential)
+        yield self.env.process(self.fire_review(permit))
+        
+        # Public Health review: 1.3% of permits (sequential)
+        if random.random() < 0.013:
+            yield self.env.process(self.public_health_review(permit))
         
         # Ready for construction
         permit.ready_for_construction = self.env.now
