@@ -33,6 +33,15 @@ class Permit:
     debris_removal_request: Optional[float] = None
     debris_removal_service_start: Optional[float] = None
     debris_removal_end: Optional[float] = None
+    # Debris removal (separate EPA vs USACE)
+    epa_debris_request: Optional[float] = None
+    epa_debris_service_start: Optional[float] = None
+    epa_debris_end: Optional[float] = None
+    epa_debris_total_waiting: float = 0.0
+    usace_debris_request: Optional[float] = None
+    usace_debris_service_start: Optional[float] = None
+    usace_debris_end: Optional[float] = None
+    usace_debris_total_waiting: float = 0.0
     # Authorization (no waiting, just service time)
     authorization_start: Optional[float] = None
     authorization_end: Optional[float] = None
@@ -81,8 +90,8 @@ class PermitSimulation:
         np.random.seed(random_seed)
         
         # Resource pools
-        self.epa_debris_servers = simpy.Resource(env, capacity=140)
-        self.usace_debris_servers = simpy.Resource(env, capacity=140)
+        self.epa_debris_servers = simpy.Resource(env, capacity=160)
+        self.usace_debris_servers = simpy.Resource(env, capacity=116)
         self.planning_servers = simpy.PriorityResource(env, capacity=100)  # 20 servers × 5 permits each
         self.public_works_servers = simpy.PriorityResource(env, capacity=200) # 40 servers x 5 permits each
         self.fire_servers = simpy.PriorityResource(env, capacity=100)
@@ -131,22 +140,32 @@ class PermitSimulation:
     def epa_debris_removal(self, permit: Permit):
         """EPA Debris Removal (Phase 1)."""
         permit.debris_removal_request = self.env.now
+        permit.epa_debris_request = self.env.now
+        request_time = self.env.now
         with self.epa_debris_servers.request() as request:
             yield request
             permit.debris_removal_service_start = self.env.now
+            permit.epa_debris_service_start = self.env.now
+            permit.epa_debris_total_waiting += (permit.epa_debris_service_start - request_time)
             # Uniform: 2 or 3 days, each with 50% probability
             duration = self.sample_uniform_days()
             yield self.env.timeout(duration)
+        permit.epa_debris_end = self.env.now
         # Note: debris_removal_end will be set after USACE completes
     
     def usace_debris_removal(self, permit: Permit):
         """USACE Debris Removal (Phase 2)."""
         # USACE follows immediately after EPA
+        permit.usace_debris_request = self.env.now
+        request_time = self.env.now
         with self.usace_debris_servers.request() as request:
             yield request
+            permit.usace_debris_service_start = self.env.now
+            permit.usace_debris_total_waiting += (permit.usace_debris_service_start - request_time)
             # Uniform: 2 or 3 days, each with 50% probability
             duration = self.sample_uniform_days()
             yield self.env.timeout(duration)
+        permit.usace_debris_end = self.env.now
         # Set end time after both EPA and USACE phases complete
         permit.debris_removal_end = self.env.now
     
@@ -174,20 +193,20 @@ class PermitSimulation:
     
     def planning_department(self, permit: Permit):
         """Planning department processing.
-        Segments 5&6 (self-certification) skip this step entirely.
         """
-        if permit.segment in [Segment.SELF_CERT_LIKE, Segment.SELF_CERT_NON_LIKE]:
-            # Skip planning department
-            return
-        
         permit.planning_request = self.env.now
-        with self.planning_servers.request() as request:
+        request_time = self.env.now
+
+        priority = 0 if permit.planning_rechecks == 0 else 1
+        with self.planning_servers.request(priority=priority) as request:
             yield request
-            permit.planning_service_start = self.env.now
-            
+            service_start_time = self.env.now
+            if permit.planning_rechecks == 0:
+                permit.planning_service_start = service_start_time
+            permit.planning_total_waiting += (permit.planning_service_start - request_time)
             # Segments 2 & 4 (non-like-for-like) - N(9, 2) days
             # Segments 1 & 3 (like-for-like) - N(3, 1) days
-            if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE]:
+            if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
                 duration_days = self.sample_normal(9, 2)
             else:  # Segments 1 & 3
                 duration_days = self.sample_normal(3, 1)
@@ -217,8 +236,8 @@ class PermitSimulation:
         Segments 3-6 (non-pre-approved) take longer.
         Sets permit.public_works_approved to True if approved, False if needs re-check.
         """
-        
-        permit.public_works_request = self.env.now
+        if permit.public_works_request is None:
+            permit.public_works_request = self.env.now
         request_time = self.env.now
 
         priority = 0 if permit.public_works_rechecks == 0 else 1
@@ -230,27 +249,36 @@ class PermitSimulation:
             permit.public_works_total_waiting += (service_start_time - request_time)  # Track cumulative waiting
             # N(11.6, 2) days for non-pre-approved plans
             # N(4, 1) days for pre-approved plans
-            duration_days = self.sample_normal(11.6, 2)
+            duration_days = self.sample_normal(8, 2)
             duration_days_pre_approved = self.sample_normal(4, 1)
-            if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
-                yield self.env.timeout(duration_days_pre_approved)
+            duration_days_recheck = self.sample_normal(4, 1)
+            if permit.public_works_rechecks == 0:
+                if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
+                    yield self.env.timeout(duration_days_pre_approved)
+                else:
+                    yield self.env.timeout(duration_days)
             else:
-                yield self.env.timeout(duration_days)
-        
+                yield self.env.timeout(duration_days_recheck)
+
         if permit.public_works_rechecks == 0:
             # 25% approved, 75% need re-check
             approved = random.random() < 0.25
-            if approved:
-                permit.public_works_end = self.env.now
-            else:
-                permit.public_works_rechecks += 1
         else:
-            # 90% approved, 10% need re-check if has already been rechecked
-            approved = random.random() < 0.9
-            if approved:
-                permit.public_works_end = self.env.now
-            else:
-                permit.public_works_rechecks += 1
+            # 95% approved, 5% need re-check if has already been rechecked
+            approved = random.random() < 0.95
+
+        if approved:
+            permit.public_works_end = self.env.now
+        else:
+            permit.public_works_rechecks += 1
+
+        return approved
+
+    def public_works_until_approved(self, permit: Permit):
+        """Loop public works until approved (used for parallel flow)."""
+        public_works_approved = False
+        while not public_works_approved:
+            public_works_approved = yield self.env.process(self.public_works(permit))
 
     
     def fire_review(self, permit: Permit):
@@ -304,8 +332,8 @@ class PermitSimulation:
         # Parallel processes: Building & Safety (Public Works), Fire Review, and Public Health Review
         parallel_processes = []
         
-        # Public Works (Building & Safety)
-        parallel_processes.append(self.env.process(self.public_works(permit)))
+        # Public Works (Building & Safety) - loop until approved
+        parallel_processes.append(self.env.process(self.public_works_until_approved(permit)))
         
         # Fire review: all permits go through fire review
         parallel_processes.append(self.env.process(self.fire_review(permit)))
@@ -342,8 +370,8 @@ class PermitSimulation:
         # Miscellaneous permits (for non-like-for-like segments 2, 4, 6)
         yield self.env.process(self.misc_permits(permit))
         
-        # Building & Safety (Public Works)
-        yield self.env.process(self.public_works(permit))
+        # Building & Safety (Public Works) - loop until approved
+        yield self.env.process(self.public_works_until_approved(permit))
         
         # Fire review: all permits go through fire review (sequential)
         yield self.env.process(self.fire_review(permit))
@@ -435,6 +463,34 @@ class PermitSimulation:
             "average": statistics.mean(recheck_counts) if recheck_counts else 0,
             "max": max(recheck_counts) if recheck_counts else 0,
             "total_permits_with_rechecks": sum(1 for c in recheck_counts if c > 0),
+        }
+
+        # Debris removal (EPA vs USACE): waiting + service time
+        epa_waiting = [p.epa_debris_total_waiting for p in self.completed_permits]
+        usace_waiting = [p.usace_debris_total_waiting for p in self.completed_permits]
+
+        epa_service = [
+            (p.epa_debris_end - p.epa_debris_service_start)
+            for p in self.completed_permits
+            if p.epa_debris_end is not None and p.epa_debris_service_start is not None
+        ]
+        usace_service = [
+            (p.usace_debris_end - p.usace_debris_service_start)
+            for p in self.completed_permits
+            if p.usace_debris_end is not None and p.usace_debris_service_start is not None
+        ]
+
+        stats["debris_removal_epa"] = {
+            "waiting_mean": statistics.mean(epa_waiting) if epa_waiting else 0,
+            "waiting_median": statistics.median(epa_waiting) if epa_waiting else 0,
+            "service_mean": statistics.mean(epa_service) if epa_service else 0,
+            "service_median": statistics.median(epa_service) if epa_service else 0,
+        }
+        stats["debris_removal_usace"] = {
+            "waiting_mean": statistics.mean(usace_waiting) if usace_waiting else 0,
+            "waiting_median": statistics.median(usace_waiting) if usace_waiting else 0,
+            "service_mean": statistics.mean(usace_service) if usace_service else 0,
+            "service_median": statistics.median(usace_service) if usace_service else 0,
         }
         
         return stats

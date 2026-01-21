@@ -17,12 +17,23 @@ def calculate_stage_times(permit: Permit) -> dict:
     """
     stages = {}
     
-    # Debris removal (EPA + USACE) - separate waiting and service
-    if (permit.debris_removal_request is not None and 
-        permit.debris_removal_service_start is not None and 
-        permit.debris_removal_end is not None):
-        stages['Debris Removal (Waiting)'] = permit.debris_removal_service_start - permit.debris_removal_request
-        stages['Debris Removal (Service)'] = permit.debris_removal_end - permit.debris_removal_service_start
+    # Debris removal - EPA (separate waiting and service)
+    if (
+        permit.epa_debris_request is not None
+        and permit.epa_debris_service_start is not None
+        and permit.epa_debris_end is not None
+    ):
+        stages["EPA Debris (Waiting)"] = permit.epa_debris_service_start - permit.epa_debris_request
+        stages["EPA Debris (Service)"] = permit.epa_debris_end - permit.epa_debris_service_start
+
+    # Debris removal - USACE (separate waiting and service)
+    if (
+        permit.usace_debris_request is not None
+        and permit.usace_debris_service_start is not None
+        and permit.usace_debris_end is not None
+    ):
+        stages["USACE Debris (Waiting)"] = permit.usace_debris_service_start - permit.usace_debris_request
+        stages["USACE Debris (Service)"] = permit.usace_debris_end - permit.usace_debris_service_start
     
     # Authorization (no waiting, just service time)
     if permit.authorization_start is not None and permit.authorization_end is not None:
@@ -92,8 +103,10 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
     
     # Define stage order and colors (waiting times are lighter, service times are darker)
     stage_order = [
-        'Debris Removal (Waiting)',
-        'Debris Removal (Service)',
+        'EPA Debris (Waiting)',
+        'EPA Debris (Service)',
+        'USACE Debris (Waiting)',
+        'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
         'Planning (Waiting)',
@@ -111,7 +124,8 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
     
     colors = {
         # Waiting times (lighter colors)
-        'Debris Removal (Waiting)': '#FFB3B3',
+        'EPA Debris (Waiting)': '#FFB3B3',
+        'USACE Debris (Waiting)': '#FFC2A6',
         'Planning (Waiting)': '#FFD4B3',
         'Miscellaneous (Waiting)': '#D4A5A5',
         'Public Works (Waiting)': '#C8E8D8',
@@ -119,7 +133,8 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
         'Public Health (Waiting)': '#E0C8E8',
         'Other Waiting': '#E0E0E0',
         # Service times (darker colors)
-        'Debris Removal (Service)': '#FF6B6B',
+        'EPA Debris (Service)': '#FF6B6B',
+        'USACE Debris (Service)': '#FF8C5A',
         'Planning (Service)': '#FFA07A',
         'Miscellaneous (Service)': '#C08080',
         'Public Works (Service)': '#98D8C8',
@@ -146,7 +161,14 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
     bars = []
     
     # Always include key stages even if they have zeros (for visibility)
-    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
+    key_stages = [
+        'EPA Debris (Waiting)',
+        'EPA Debris (Service)',
+        'USACE Debris (Waiting)',
+        'USACE Debris (Service)',
+        'Authorization',
+        'Plan Preparation',
+    ]
     
     for stage in stage_order:
         values = stage_data[stage]
@@ -185,7 +207,8 @@ def plot_gantt_chart(permits: List[Permit], max_permits: int = 30, figsize=(14, 
     # Define stages in sequential order (left to right) as they occur in the process
     # Format: (name, request_attr, service_start_attr, end_attr, waiting_color, service_color)
     stages_info = [
-        ('Debris Removal', 'debris_removal_request', 'debris_removal_service_start', 'debris_removal_end', '#FFB3B3', '#FF6B6B'),
+        ('EPA Debris', 'epa_debris_request', 'epa_debris_service_start', 'epa_debris_end', '#FFB3B3', '#FF6B6B'),
+        ('USACE Debris', 'usace_debris_request', 'usace_debris_service_start', 'usace_debris_end', '#FFC2A6', '#FF8C5A'),
         ('Authorization', 'authorization_start', None, 'authorization_end', None, '#4ECDC4'),
         ('Plan Preparation', 'plan_prep_start', None, 'plan_prep_end', None, '#45B7D1'),
         ('Planning', 'planning_request', 'planning_service_start', 'planning_end', '#FFD4B3', '#FFA07A'),
@@ -293,7 +316,8 @@ def plot_average_time_by_stage(permits: List[Permit], figsize=(10, 6)):
     # Colors for all possible stages
     colors = {
         # Waiting times (lighter colors)
-        'Debris Removal (Waiting)': '#FFB3B3',
+        'EPA Debris (Waiting)': '#FFB3B3',
+        'USACE Debris (Waiting)': '#FFC2A6',
         'Planning (Waiting)': '#FFD4B3',
         'Public Works (Waiting)': '#C8E8D8',
         'Fire Review (Waiting)': '#FBF3B3',
@@ -301,7 +325,8 @@ def plot_average_time_by_stage(permits: List[Permit], figsize=(10, 6)):
         'Miscellaneous (Waiting)': '#D4A5A5',
         'Other Waiting': '#E0E0E0',
         # Service times (darker colors)
-        'Debris Removal (Service)': '#FF6B6B',
+        'EPA Debris (Service)': '#FF6B6B',
+        'USACE Debris (Service)': '#FF8C5A',
         'Planning (Service)': '#FFA07A',
         'Public Works (Service)': '#98D8C8',
         'Fire Review (Service)': '#F7DC6F',
@@ -326,7 +351,14 @@ def plot_average_time_by_stage(permits: List[Permit], figsize=(10, 6)):
                       for stage, values in stage_totals.items()}
     
     # Filter out stages with zero average, but always include key stages
-    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
+    key_stages = [
+        'EPA Debris (Waiting)',
+        'EPA Debris (Service)',
+        'USACE Debris (Waiting)',
+        'USACE Debris (Service)',
+        'Authorization',
+        'Plan Preparation',
+    ]
     stage_averages = {k: v for k, v in stage_averages.items() if v > 0 or k in key_stages}
     
     # Create bar chart
@@ -405,8 +437,10 @@ def plot_time_by_segment(permits: List[Permit], figsize=(12, 6)):
     
     # Define preferred order for display
     preferred_order = [
-        'Debris Removal (Waiting)',
-        'Debris Removal (Service)',
+        'EPA Debris (Waiting)',
+        'EPA Debris (Service)',
+        'USACE Debris (Waiting)',
+        'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
         'Planning (Waiting)',
@@ -423,7 +457,14 @@ def plot_time_by_segment(permits: List[Permit], figsize=(12, 6)):
     
     # Filter to only stages with data, maintaining preferred order
     # Always include key stages even if they don't appear in all_stages (for consistency)
-    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
+    key_stages = [
+        'EPA Debris (Waiting)',
+        'EPA Debris (Service)',
+        'USACE Debris (Waiting)',
+        'USACE Debris (Service)',
+        'Authorization',
+        'Plan Preparation',
+    ]
     stage_order = [s for s in preferred_order if s in all_stages or s in key_stages]
     # Add any remaining stages not in preferred order
     for stage in sorted(all_stages):
@@ -522,8 +563,10 @@ def plot_time_by_segment_like_for_like(permits: List[Permit], figsize=(12, 6)):
     
     # Define preferred order for display
     preferred_order = [
-        'Debris Removal (Waiting)',
-        'Debris Removal (Service)',
+        'EPA Debris (Waiting)',
+        'EPA Debris (Service)',
+        'USACE Debris (Waiting)',
+        'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
         'Planning (Waiting)',
@@ -539,7 +582,14 @@ def plot_time_by_segment_like_for_like(permits: List[Permit], figsize=(12, 6)):
     ]
     
     # Filter to only stages with data, maintaining preferred order
-    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
+    key_stages = [
+        'EPA Debris (Waiting)',
+        'EPA Debris (Service)',
+        'USACE Debris (Waiting)',
+        'USACE Debris (Service)',
+        'Authorization',
+        'Plan Preparation',
+    ]
     stage_order = [s for s in preferred_order if s in all_stages or s in key_stages]
     # Add any remaining stages not in preferred order
     for stage in sorted(all_stages):
@@ -636,8 +686,10 @@ def plot_time_by_segment_non_like_for_like(permits: List[Permit], figsize=(12, 6
     
     # Define preferred order for display
     preferred_order = [
-        'Debris Removal (Waiting)',
-        'Debris Removal (Service)',
+        'EPA Debris (Waiting)',
+        'EPA Debris (Service)',
+        'USACE Debris (Waiting)',
+        'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
         'Planning (Waiting)',
@@ -653,7 +705,14 @@ def plot_time_by_segment_non_like_for_like(permits: List[Permit], figsize=(12, 6
     ]
     
     # Filter to only stages with data, maintaining preferred order
-    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
+    key_stages = [
+        'EPA Debris (Waiting)',
+        'EPA Debris (Service)',
+        'USACE Debris (Waiting)',
+        'USACE Debris (Service)',
+        'Authorization',
+        'Plan Preparation',
+    ]
     stage_order = [s for s in preferred_order if s in all_stages or s in key_stages]
     # Add any remaining stages not in preferred order
     for stage in sorted(all_stages):
@@ -774,13 +833,14 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
     return fig, ax
 
 
-def visualize_all(permits: List[Permit], save_prefix: str = None):
+def visualize_all(permits: List[Permit], save_prefix: str = None, show: bool = True):
     """
     Create all visualizations and optionally save them.
     
     Args:
         permits: List of Permit objects
         save_prefix: If provided, save figures with this prefix
+        show: If True, display figures interactively
     """
     print(f"Creating visualizations for {len(permits)} permits...")
     
@@ -833,7 +893,8 @@ def visualize_all(permits: List[Permit], save_prefix: str = None):
         fig5.savefig(f"{save_prefix}_total_time_by_segment.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_total_time_by_segment.png")
     
-    plt.show()
+    if show:
+        plt.show()
     print("Visualizations complete!")
 
 
