@@ -60,6 +60,10 @@ class Permit:
     public_works_end: Optional[float] = None
     public_works_total_waiting: float = 0.0  # Cumulative waiting time across all checks/rechecks
     public_works_rechecks: int = 0
+    public_works_initial_waiting: float = 0.0
+    public_works_initial_service: float = 0.0
+    public_works_recheck_waiting: float = 0.0
+    public_works_recheck_service: float = 0.0
     # Fire review
     fire_review_request: Optional[float] = None
     fire_review_service_start: Optional[float] = None
@@ -236,29 +240,39 @@ class PermitSimulation:
         Segments 3-6 (non-pre-approved) take longer.
         Sets permit.public_works_approved to True if approved, False if needs re-check.
         """
-        if permit.public_works_request is None:
+        is_initial = permit.public_works_rechecks == 0
+        if is_initial and permit.public_works_request is None:
             permit.public_works_request = self.env.now
         request_time = self.env.now
 
-        priority = 0 if permit.public_works_rechecks == 0 else 1
+        priority = 1 if permit.public_works_rechecks == 0 else 0
         with self.public_works_servers.request(priority=priority) as request:
             yield request
             service_start_time = self.env.now
-            if permit.public_works_rechecks == 0:
+            if is_initial:
                 permit.public_works_service_start = service_start_time  # Track first service start
             permit.public_works_total_waiting += (service_start_time - request_time)  # Track cumulative waiting
+            if is_initial:
+                permit.public_works_initial_waiting += (service_start_time - request_time)
+            else:
+                permit.public_works_recheck_waiting += (service_start_time - request_time)
             # N(11.6, 2) days for non-pre-approved plans
             # N(4, 1) days for pre-approved plans
             duration_days = self.sample_normal(8, 2)
             duration_days_pre_approved = self.sample_normal(4, 1)
             duration_days_recheck = self.sample_normal(4, 1)
-            if permit.public_works_rechecks == 0:
+            if is_initial:
                 if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
                     yield self.env.timeout(duration_days_pre_approved)
                 else:
                     yield self.env.timeout(duration_days)
             else:
                 yield self.env.timeout(duration_days_recheck)
+            service_end_time = self.env.now
+            if is_initial:
+                permit.public_works_initial_service += (service_end_time - service_start_time)
+            else:
+                permit.public_works_recheck_service += (service_end_time - service_start_time)
 
         if permit.public_works_rechecks == 0:
             # 25% approved, 75% need re-check
