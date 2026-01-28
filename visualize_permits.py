@@ -54,6 +54,8 @@ def calculate_stage_times(permit: Permit) -> dict:
         stages["Planning Initial (Service)"] = permit.planning_initial_service
         stages["Planning Recheck (Waiting)"] = permit.planning_recheck_waiting
         stages["Planning Recheck (Service)"] = permit.planning_recheck_service
+        stages["Planning Total Waiting"] = permit.planning_initial_waiting + permit.planning_recheck_waiting
+        stages["Planning Total Service"] = permit.planning_initial_service + permit.planning_recheck_service
     
     # Public Works - separate waiting and service
     if (
@@ -66,6 +68,8 @@ def calculate_stage_times(permit: Permit) -> dict:
         stages["Public Works Initial (Service)"] = permit.public_works_initial_service
         stages["Public Works Recheck (Waiting)"] = permit.public_works_recheck_waiting
         stages["Public Works Recheck (Service)"] = permit.public_works_recheck_service
+        stages["Public Works Total Waiting"] = permit.public_works_initial_waiting + permit.public_works_recheck_waiting
+        stages["Public Works Total Service"] = permit.public_works_initial_service + permit.public_works_recheck_service
     
     # Fire review - four buckets (initial waiting/service, recheck waiting/service)
     if (
@@ -78,6 +82,8 @@ def calculate_stage_times(permit: Permit) -> dict:
         stages["Fire Review Initial (Service)"] = permit.fire_initial_service
         stages["Fire Review Recheck (Waiting)"] = permit.fire_recheck_waiting
         stages["Fire Review Recheck (Service)"] = permit.fire_recheck_service
+        stages["Fire Review Total Waiting"] = permit.fire_initial_waiting + permit.fire_recheck_waiting
+        stages["Fire Review Total Service"] = permit.fire_initial_service + permit.fire_recheck_service
     
     # Public Health review - four buckets (initial waiting/service, recheck waiting/service)
     if (
@@ -90,6 +96,8 @@ def calculate_stage_times(permit: Permit) -> dict:
         stages["Public Health Initial (Service)"] = permit.public_health_initial_service
         stages["Public Health Recheck (Waiting)"] = permit.public_health_recheck_waiting
         stages["Public Health Recheck (Service)"] = permit.public_health_recheck_service
+        stages["Public Health Total Waiting"] = permit.public_health_initial_waiting + permit.public_health_recheck_waiting
+        stages["Public Health Total Service"] = permit.public_health_initial_service + permit.public_health_recheck_service
     
     # Miscellaneous permits - separate waiting and service
     if (permit.misc_request is not None and 
@@ -107,6 +115,87 @@ def calculate_stage_times(permit: Permit) -> dict:
             stages['Other Waiting'] = waiting_time
     
     return stages
+
+
+def calculate_step_waiting_service_totals(permit: Permit) -> dict:
+    """
+    Calculate total waiting and service times for each major process step,
+    aggregating across initial/recheck where applicable.
+    Returns a dict: {step_name: {"waiting": float, "service": float}}.
+    """
+    steps = {}
+
+    # EPA Debris
+    epa_waiting = permit.epa_debris_total_waiting
+    epa_service = 0.0
+    if permit.epa_debris_end is not None and permit.epa_debris_service_start is not None:
+        epa_service = permit.epa_debris_end - permit.epa_debris_service_start
+    if epa_waiting > 0 or epa_service > 0:
+        steps["EPA Debris"] = {"waiting": epa_waiting, "service": epa_service}
+
+    # USACE Debris
+    usace_waiting = permit.usace_debris_total_waiting
+    usace_service = 0.0
+    if permit.usace_debris_end is not None and permit.usace_debris_service_start is not None:
+        usace_service = permit.usace_debris_end - permit.usace_debris_service_start
+    if usace_waiting > 0 or usace_service > 0:
+        steps["USACE Debris"] = {"waiting": usace_waiting, "service": usace_service}
+
+    # Authorization (service only)
+    if permit.authorization_start is not None and permit.authorization_end is not None:
+        auth_service = permit.authorization_end - permit.authorization_start
+        if auth_service > 0:
+            steps["Authorization"] = {"waiting": 0.0, "service": auth_service}
+
+    # Plan preparation (service only)
+    if permit.plan_prep_start is not None and permit.plan_prep_end is not None:
+        prep_service = permit.plan_prep_end - permit.plan_prep_start
+        if prep_service > 0:
+            steps["Plan Preparation"] = {"waiting": 0.0, "service": prep_service}
+
+    # Planning department (aggregate initial + recheck)
+    planning_waiting = permit.planning_initial_waiting + permit.planning_recheck_waiting
+    planning_service = permit.planning_initial_service + permit.planning_recheck_service
+    if planning_waiting > 0 or planning_service > 0:
+        steps["Planning"] = {"waiting": planning_waiting, "service": planning_service}
+
+    # Miscellaneous permits
+    misc_waiting = 0.0
+    misc_service = 0.0
+    if (
+        permit.misc_request is not None
+        and permit.misc_service_start is not None
+        and permit.misc_end is not None
+    ):
+        misc_waiting = permit.misc_service_start - permit.misc_request
+        misc_service = permit.misc_end - permit.misc_service_start
+    if misc_waiting > 0 or misc_service > 0:
+        steps["Miscellaneous"] = {"waiting": misc_waiting, "service": misc_service}
+
+    # Public Works (aggregate initial + recheck)
+    public_works_waiting = permit.public_works_total_waiting
+    public_works_service = (
+        permit.public_works_initial_service + permit.public_works_recheck_service
+    )
+    if public_works_waiting > 0 or public_works_service > 0:
+        steps["Public Works"] = {
+            "waiting": public_works_waiting,
+            "service": public_works_service,
+        }
+
+    # Fire Review (aggregate initial + recheck)
+    fire_waiting = permit.fire_initial_waiting + permit.fire_recheck_waiting
+    fire_service = permit.fire_initial_service + permit.fire_recheck_service
+    if fire_waiting > 0 or fire_service > 0:
+        steps["Fire Review"] = {"waiting": fire_waiting, "service": fire_service}
+
+    # Public Health Review (aggregate initial + recheck)
+    ph_waiting = permit.public_health_initial_waiting + permit.public_health_recheck_waiting
+    ph_service = permit.public_health_initial_service + permit.public_health_recheck_service
+    if ph_waiting > 0 or ph_service > 0:
+        steps["Public Health"] = {"waiting": ph_waiting, "service": ph_service}
+
+    return steps
 
 
 def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize=(14, 8)):
@@ -901,6 +990,104 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
     return fig, ax
 
 
+def plot_average_waiting_and_service_by_step(
+    permits: List[Permit], figsize=(10, 6)
+):
+    """
+    Create a bar chart showing average total waiting vs service time for each
+    major process step (EPA, USACE, Planning, Public Works, etc.), with
+    initial and recheck times aggregated together.
+    """
+    if not permits:
+        print("No permits provided for waiting/service by step chart.")
+        return None, None
+
+    # Accumulate per-step waiting and service times across permits
+    step_waiting = {}
+    step_service = {}
+
+    for permit in permits:
+        totals = calculate_step_waiting_service_totals(permit)
+        for step_name, values in totals.items():
+            step_waiting.setdefault(step_name, []).append(values["waiting"])
+            step_service.setdefault(step_name, []).append(values["service"])
+
+    if not step_waiting:
+        print("No step data found for waiting/service chart.")
+        return None, None
+
+    # Define preferred order to match process flow
+    preferred_order = [
+        "EPA Debris",
+        "USACE Debris",
+        "Authorization",
+        "Plan Preparation",
+        "Planning",
+        "Miscellaneous",
+        "Public Works",
+        "Fire Review",
+        "Public Health",
+    ]
+
+    steps = [s for s in preferred_order if s in step_waiting]
+    # Add any remaining steps not in preferred order
+    for step in sorted(step_waiting.keys()):
+        if step not in steps:
+            steps.append(step)
+
+    waiting_means = [np.mean(step_waiting[s]) for s in steps]
+    service_means = [np.mean(step_service.get(s, [0.0])) for s in steps]
+
+    x = np.arange(len(steps))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    bars_wait = ax.bar(
+        x - width / 2,
+        waiting_means,
+        width,
+        label="Waiting",
+        color="#E0E0E0",
+        edgecolor="black",
+    )
+    bars_service = ax.bar(
+        x + width / 2,
+        service_means,
+        width,
+        label="Service",
+        color="#4ECDC4",
+        edgecolor="black",
+    )
+
+    # Add value labels
+    for bar in list(bars_wait) + list(bars_service):
+        height = bar.get_height()
+        ax.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height,
+            f"{height:.1f}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+    ax.set_xlabel("Process Step", fontsize=12)
+    ax.set_ylabel("Average Time (days)", fontsize=12)
+    ax.set_title(
+        "Average Total Waiting vs Service Time by Process Step",
+        fontsize=14,
+        fontweight="bold",
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(steps, rotation=45, ha="right")
+    ax.legend()
+    ax.grid(axis="y", alpha=0.3)
+
+    plt.tight_layout()
+    return fig, ax
+
+
 def visualize_all(permits: List[Permit], save_prefix: str = None, show: bool = True):
     """
     Create all visualizations and optionally save them.
@@ -960,6 +1147,13 @@ def visualize_all(permits: List[Permit], save_prefix: str = None, show: bool = T
     if save_prefix and fig5:
         fig5.savefig(f"{save_prefix}_total_time_by_segment.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_total_time_by_segment.png")
+
+    # 6. Average total waiting vs service by step
+    print("  Creating waiting vs service by step chart...")
+    fig6, _ = plot_average_waiting_and_service_by_step(permits)
+    if save_prefix and fig6:
+        fig6.savefig(f"{save_prefix}_waiting_service_by_step.png", dpi=300, bbox_inches='tight')
+        print(f"    Saved: {save_prefix}_waiting_service_by_step.png")
     
     if show:
         plt.show()
