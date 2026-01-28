@@ -54,6 +54,10 @@ class Permit:
     planning_end: Optional[float] = None
     planning_total_waiting: float = 0.0  # Cumulative waiting time across all rereviews
     planning_rechecks: int = 0
+    planning_initial_waiting: float = 0.0
+    planning_initial_service: float = 0.0
+    planning_recheck_waiting: float = 0.0
+    planning_recheck_service: float = 0.0
     # Public Works
     public_works_request: Optional[float] = None
     public_works_service_start: Optional[float] = None  # First service start (for waiting time calculation)
@@ -70,12 +74,20 @@ class Permit:
     fire_review_end: Optional[float] = None
     fire_review_total_waiting: float = 0.0  # Cumulative waiting time across all rereviews
     fire_rechecks: int = 0
+    fire_initial_waiting: float = 0.0
+    fire_initial_service: float = 0.0
+    fire_recheck_waiting: float = 0.0
+    fire_recheck_service: float = 0.0
     # Public Health review
     public_health_request: Optional[float] = None
     public_health_service_start: Optional[float] = None
     public_health_end: Optional[float] = None
     public_health_total_waiting: float = 0.0  # Cumulative waiting time across all rereviews
     public_health_rechecks: int = 0
+    public_health_initial_waiting: float = 0.0
+    public_health_initial_service: float = 0.0
+    public_health_recheck_waiting: float = 0.0
+    public_health_recheck_service: float = 0.0
     # Miscellaneous permits
     misc_request: Optional[float] = None
     misc_service_start: Optional[float] = None
@@ -196,27 +208,55 @@ class PermitSimulation:
         permit.plan_prep_end = self.env.now
     
     def planning_department(self, permit: Permit):
-        """Planning department processing.
+        """Planning department processing with approval/recheck logic.
         """
-        permit.planning_request = self.env.now
+        is_initial = permit.planning_rechecks == 0
+        if is_initial and permit.planning_request is None:
+            permit.planning_request = self.env.now
         request_time = self.env.now
 
-        priority = 0 if permit.planning_rechecks == 0 else 1
+        priority = 1 if permit.planning_rechecks == 0 else 0
         with self.planning_servers.request(priority=priority) as request:
             yield request
             service_start_time = self.env.now
-            if permit.planning_rechecks == 0:
+            if is_initial:
                 permit.planning_service_start = service_start_time
-            permit.planning_total_waiting += (permit.planning_service_start - request_time)
+            permit.planning_total_waiting += (service_start_time - request_time)
+            if is_initial:
+                permit.planning_initial_waiting += (service_start_time - request_time)
+            else:
+                permit.planning_recheck_waiting += (service_start_time - request_time)
             # Segments 2 & 4 (non-like-for-like) - N(9, 2) days
             # Segments 1 & 3 (like-for-like) - N(3, 1) days
-            if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
-                duration_days = self.sample_normal(9, 2)
-            else:  # Segments 1 & 3
-                duration_days = self.sample_normal(3, 1)
+            if is_initial:
+                if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
+                    duration_days = self.sample_normal(9, 2)
+                else:  # Segments 1 & 3
+                    duration_days = self.sample_normal(3, 1)
+            else:
+                # Recheck uses shorter time
+                duration_days = self.sample_normal(2, 0.5)
             
             yield self.env.timeout(duration_days)
-        permit.planning_end = self.env.now
+            service_end_time = self.env.now
+            if is_initial:
+                permit.planning_initial_service += (service_end_time - service_start_time)
+            else:
+                permit.planning_recheck_service += (service_end_time - service_start_time)
+        
+        if permit.planning_rechecks == 0:
+            # 25% approved, 75% need re-check
+            approved = random.random() < 0.25
+        else:
+            # 95% approved, 5% need re-check if has already been rechecked
+            approved = random.random() < 0.95
+
+        if approved:
+            permit.planning_end = self.env.now
+        else:
+            permit.planning_rechecks += 1
+
+        return approved
 
     def misc_permits(self, permit: Permit):
         """Miscellaneous permits administered by various other departments.
@@ -294,35 +334,121 @@ class PermitSimulation:
         while not public_works_approved:
             public_works_approved = yield self.env.process(self.public_works(permit))
 
+    def planning_until_approved(self, permit: Permit):
+        """Loop planning department until approved."""
+        planning_approved = False
+        while not planning_approved:
+            planning_approved = yield self.env.process(self.planning_department(permit))
+
+    def fire_review_until_approved(self, permit: Permit):
+        """Loop fire review until approved."""
+        fire_approved = False
+        while not fire_approved:
+            fire_approved = yield self.env.process(self.fire_review(permit))
+
+    def public_health_review_until_approved(self, permit: Permit):
+        """Loop public health review until approved."""
+        public_health_approved = False
+        while not public_health_approved:
+            public_health_approved = yield self.env.process(self.public_health_review(permit))
+
     
     def fire_review(self, permit: Permit):
-        """Fire department review (all permits).
+        """Fire department review (all permits) with approval/recheck logic.
         70% take ~1 day, 30% take ~13 days.
         """
-        permit.fire_review_request = self.env.now
-        with self.fire_servers.request() as request:
+        is_initial = permit.fire_rechecks == 0
+        if is_initial and permit.fire_review_request is None:
+            permit.fire_review_request = self.env.now
+        request_time = self.env.now
+
+        priority = 1 if permit.fire_rechecks == 0 else 0
+        with self.fire_servers.request(priority=priority) as request:
             yield request
-            permit.fire_review_service_start = self.env.now
-            # 70% take ~1 day, 30% take ~13 days
-            if random.random() < 0.70:
-                # Quick review: ~1 day (normal distribution around 1 day)
-                duration_days = self.sample_normal(1, 0.2)
+            service_start_time = self.env.now
+            if is_initial:
+                permit.fire_review_service_start = service_start_time
+            permit.fire_review_total_waiting += (service_start_time - request_time)
+            if is_initial:
+                permit.fire_initial_waiting += (service_start_time - request_time)
             else:
-                # Detailed review: ~13 days (normal distribution around 13 days)
-                duration_days = self.sample_normal(13, 2)
+                permit.fire_recheck_waiting += (service_start_time - request_time)
+            # 70% take ~1 day, 30% take ~13 days (for initial)
+            if is_initial:
+                if random.random() < 0.70:
+                    # Quick review: ~1 day (normal distribution around 1 day)
+                    duration_days = self.sample_normal(1, 0.2)
+                else:
+                    # Detailed review: ~13 days (normal distribution around 13 days)
+                    duration_days = self.sample_normal(13, 2)
+            else:
+                # Recheck uses shorter time
+                duration_days = self.sample_normal(2, 0.5)
             yield self.env.timeout(duration_days)
-        permit.fire_review_end = self.env.now
+            service_end_time = self.env.now
+            if is_initial:
+                permit.fire_initial_service += (service_end_time - service_start_time)
+            else:
+                permit.fire_recheck_service += (service_end_time - service_start_time)
+        
+        if permit.fire_rechecks == 0:
+            # 25% approved, 75% need re-check
+            approved = random.random() < 0.25
+        else:
+            # 95% approved, 5% need re-check if has already been rechecked
+            approved = random.random() < 0.95
+
+        if approved:
+            permit.fire_review_end = self.env.now
+        else:
+            permit.fire_rechecks += 1
+
+        return approved
     
     def public_health_review(self, permit: Permit):
-        """Public Health department review (1.3% of permits)."""
-        permit.public_health_request = self.env.now
-        with self.public_health_servers.request() as request:
+        """Public Health department review (1.3% of permits) with approval/recheck logic."""
+        is_initial = permit.public_health_rechecks == 0
+        if is_initial and permit.public_health_request is None:
+            permit.public_health_request = self.env.now
+        request_time = self.env.now
+
+        priority = 1 if permit.public_health_rechecks == 0 else 0
+        with self.public_health_servers.request(priority=priority) as request:
             yield request
-            permit.public_health_service_start = self.env.now
-            # N(10, 2) days - low confidence
-            duration_days = self.sample_normal(10, 2)
+            service_start_time = self.env.now
+            if is_initial:
+                permit.public_health_service_start = service_start_time
+            permit.public_health_total_waiting += (service_start_time - request_time)
+            if is_initial:
+                permit.public_health_initial_waiting += (service_start_time - request_time)
+            else:
+                permit.public_health_recheck_waiting += (service_start_time - request_time)
+            # N(10, 2) days - low confidence (for initial)
+            if is_initial:
+                duration_days = self.sample_normal(10, 2)
+            else:
+                # Recheck uses shorter time
+                duration_days = self.sample_normal(5, 1)
             yield self.env.timeout(duration_days)
-        permit.public_health_end = self.env.now
+            service_end_time = self.env.now
+            if is_initial:
+                permit.public_health_initial_service += (service_end_time - service_start_time)
+            else:
+                permit.public_health_recheck_service += (service_end_time - service_start_time)
+        
+        if permit.public_health_rechecks == 0:
+            # 25% approved, 75% need re-check
+            approved = random.random() < 0.25
+        else:
+            # 95% approved, 5% need re-check if has already been rechecked
+            approved = random.random() < 0.95
+
+        if approved:
+            permit.public_health_end = self.env.now
+        else:
+            permit.public_health_rechecks += 1
+
+        return approved
     
     def permit_process(self, permit: Permit):
         """Main process flow for a single permit."""
@@ -336,8 +462,8 @@ class PermitSimulation:
         # Wait for both paths to complete
         yield debris_process & auth_process
         
-        # Planning department (skipped for segments 5&6)
-        yield self.env.process(self.planning_department(permit))
+        # Planning department (skipped for segments 5&6) - loop until approved
+        yield self.env.process(self.planning_until_approved(permit))
         
         # Miscellaneous permits (for non-like-for-like segments 2, 4, 6)
         # Runs sequentially between planning and public works
@@ -349,12 +475,12 @@ class PermitSimulation:
         # Public Works (Building & Safety) - loop until approved
         parallel_processes.append(self.env.process(self.public_works_until_approved(permit)))
         
-        # Fire review: all permits go through fire review
-        parallel_processes.append(self.env.process(self.fire_review(permit)))
+        # Fire review: all permits go through fire review - loop until approved
+        parallel_processes.append(self.env.process(self.fire_review_until_approved(permit)))
         
-        # Public Health review: 1.3% of permits
+        # Public Health review: 1.3% of permits - loop until approved
         if random.random() < 0.013:
-            parallel_processes.append(self.env.process(self.public_health_review(permit)))
+            parallel_processes.append(self.env.process(self.public_health_review_until_approved(permit)))
         
         # Wait for all parallel processes to complete
         if parallel_processes:
@@ -378,8 +504,8 @@ class PermitSimulation:
         # Then authorization and plan preparation
         yield self.env.process(self.authorization_path(permit))
         
-        # Planning department (skipped for segments 5&6)
-        yield self.env.process(self.planning_department(permit))
+        # Planning department (skipped for segments 5&6) - loop until approved
+        yield self.env.process(self.planning_until_approved(permit))
         
         # Miscellaneous permits (for non-like-for-like segments 2, 4, 6)
         yield self.env.process(self.misc_permits(permit))
@@ -387,12 +513,12 @@ class PermitSimulation:
         # Building & Safety (Public Works) - loop until approved
         yield self.env.process(self.public_works_until_approved(permit))
         
-        # Fire review: all permits go through fire review (sequential)
-        yield self.env.process(self.fire_review(permit))
+        # Fire review: all permits go through fire review (sequential) - loop until approved
+        yield self.env.process(self.fire_review_until_approved(permit))
         
-        # Public Health review: 1.3% of permits (sequential)
+        # Public Health review: 1.3% of permits (sequential) - loop until approved
         if random.random() < 0.013:
-            yield self.env.process(self.public_health_review(permit))
+            yield self.env.process(self.public_health_review_until_approved(permit))
         
         # Ready for construction
         permit.ready_for_construction = self.env.now

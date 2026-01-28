@@ -43,12 +43,17 @@ def calculate_stage_times(permit: Permit) -> dict:
     if permit.plan_prep_start is not None and permit.plan_prep_end is not None:
         stages['Plan Preparation'] = permit.plan_prep_end - permit.plan_prep_start
     
-    # Planning department - separate waiting and service
-    if (permit.planning_request is not None and 
-        permit.planning_service_start is not None and 
-        permit.planning_end is not None):
-        stages['Planning (Waiting)'] = permit.planning_service_start - permit.planning_request
-        stages['Planning (Service)'] = permit.planning_end - permit.planning_service_start
+    # Planning department - four buckets (initial waiting/service, recheck waiting/service)
+    if (
+        permit.planning_initial_waiting > 0
+        or permit.planning_initial_service > 0
+        or permit.planning_recheck_waiting > 0
+        or permit.planning_recheck_service > 0
+    ):
+        stages["Planning Initial (Waiting)"] = permit.planning_initial_waiting
+        stages["Planning Initial (Service)"] = permit.planning_initial_service
+        stages["Planning Recheck (Waiting)"] = permit.planning_recheck_waiting
+        stages["Planning Recheck (Service)"] = permit.planning_recheck_service
     
     # Public Works - separate waiting and service
     if (
@@ -62,19 +67,29 @@ def calculate_stage_times(permit: Permit) -> dict:
         stages["Public Works Recheck (Waiting)"] = permit.public_works_recheck_waiting
         stages["Public Works Recheck (Service)"] = permit.public_works_recheck_service
     
-    # Fire review - separate waiting and service
-    if (permit.fire_review_request is not None and 
-        permit.fire_review_service_start is not None and 
-        permit.fire_review_end is not None):
-        stages['Fire Review (Waiting)'] = permit.fire_review_service_start - permit.fire_review_request
-        stages['Fire Review (Service)'] = permit.fire_review_end - permit.fire_review_service_start
+    # Fire review - four buckets (initial waiting/service, recheck waiting/service)
+    if (
+        permit.fire_initial_waiting > 0
+        or permit.fire_initial_service > 0
+        or permit.fire_recheck_waiting > 0
+        or permit.fire_recheck_service > 0
+    ):
+        stages["Fire Review Initial (Waiting)"] = permit.fire_initial_waiting
+        stages["Fire Review Initial (Service)"] = permit.fire_initial_service
+        stages["Fire Review Recheck (Waiting)"] = permit.fire_recheck_waiting
+        stages["Fire Review Recheck (Service)"] = permit.fire_recheck_service
     
-    # Public Health review - separate waiting and service
-    if (permit.public_health_request is not None and 
-        permit.public_health_service_start is not None and 
-        permit.public_health_end is not None):
-        stages['Public Health (Waiting)'] = permit.public_health_service_start - permit.public_health_request
-        stages['Public Health (Service)'] = permit.public_health_end - permit.public_health_service_start
+    # Public Health review - four buckets (initial waiting/service, recheck waiting/service)
+    if (
+        permit.public_health_initial_waiting > 0
+        or permit.public_health_initial_service > 0
+        or permit.public_health_recheck_waiting > 0
+        or permit.public_health_recheck_service > 0
+    ):
+        stages["Public Health Initial (Waiting)"] = permit.public_health_initial_waiting
+        stages["Public Health Initial (Service)"] = permit.public_health_initial_service
+        stages["Public Health Recheck (Waiting)"] = permit.public_health_recheck_waiting
+        stages["Public Health Recheck (Service)"] = permit.public_health_recheck_service
     
     # Miscellaneous permits - separate waiting and service
     if (permit.misc_request is not None and 
@@ -114,18 +129,24 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
         'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
-        'Planning (Waiting)',
-        'Planning (Service)',
+        'Planning Initial (Waiting)',
+        'Planning Initial (Service)',
+        'Planning Recheck (Waiting)',
+        'Planning Recheck (Service)',
         'Miscellaneous (Waiting)',
         'Miscellaneous (Service)',
         'Public Works Initial (Waiting)',
         'Public Works Initial (Service)',
         'Public Works Recheck (Waiting)',
         'Public Works Recheck (Service)',
-        'Fire Review (Waiting)',
-        'Fire Review (Service)',
-        'Public Health (Waiting)',
-        'Public Health (Service)',
+        'Fire Review Initial (Waiting)',
+        'Fire Review Initial (Service)',
+        'Fire Review Recheck (Waiting)',
+        'Fire Review Recheck (Service)',
+        'Public Health Initial (Waiting)',
+        'Public Health Initial (Service)',
+        'Public Health Recheck (Waiting)',
+        'Public Health Recheck (Service)',
         'Other Waiting',
     ]
     
@@ -133,22 +154,28 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
         # Waiting times (lighter colors)
         'EPA Debris (Waiting)': '#FFB3B3',
         'USACE Debris (Waiting)': '#FFC2A6',
-        'Planning (Waiting)': '#FFD4B3',
+        'Planning Initial (Waiting)': '#FFD4B3',
+        'Planning Recheck (Waiting)': '#FFE4C4',
         'Miscellaneous (Waiting)': '#D4A5A5',
         'Public Works Initial (Waiting)': '#C8E8D8',
         'Public Works Recheck (Waiting)': '#B7DCCB',
-        'Fire Review (Waiting)': '#FBF3B3',
-        'Public Health (Waiting)': '#E0C8E8',
+        'Fire Review Initial (Waiting)': '#FBF3B3',
+        'Fire Review Recheck (Waiting)': '#F9E8A0',
+        'Public Health Initial (Waiting)': '#E0C8E8',
+        'Public Health Recheck (Waiting)': '#D4B5E0',
         'Other Waiting': '#E0E0E0',
         # Service times (darker colors)
         'EPA Debris (Service)': '#FF6B6B',
         'USACE Debris (Service)': '#FF8C5A',
-        'Planning (Service)': '#FFA07A',
+        'Planning Initial (Service)': '#FFA07A',
+        'Planning Recheck (Service)': '#FFB890',
         'Miscellaneous (Service)': '#C08080',
         'Public Works Initial (Service)': '#98D8C8',
         'Public Works Recheck (Service)': '#6FC2B0',
-        'Fire Review (Service)': '#F7DC6F',
-        'Public Health (Service)': '#BB8FCE',
+        'Fire Review Initial (Service)': '#F7DC6F',
+        'Fire Review Recheck (Service)': '#F4D03F',
+        'Public Health Initial (Service)': '#BB8FCE',
+        'Public Health Recheck (Service)': '#9B6FB8',
         # Stages without waiting (service only)
         'Authorization': '#4ECDC4',
         'Plan Preparation': '#45B7D1',
@@ -175,10 +202,12 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
         'EPA Debris (Service)',
         'USACE Debris (Waiting)',
         'USACE Debris (Service)',
+        'Planning Initial (Waiting)',
+        'Planning Initial (Service)',
         'Public Works Initial (Waiting)',
         'Public Works Initial (Service)',
-        'Public Works Recheck (Waiting)',
-        'Public Works Recheck (Service)',
+        'Fire Review Initial (Waiting)',
+        'Fire Review Initial (Service)',
         'Authorization',
         'Plan Preparation',
     ]
@@ -458,16 +487,22 @@ def plot_time_by_segment(permits: List[Permit], figsize=(12, 6)):
         'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
-        'Planning (Waiting)',
-        'Planning (Service)',
+        'Planning Initial (Waiting)',
+        'Planning Initial (Service)',
+        'Planning Recheck (Waiting)',
+        'Planning Recheck (Service)',
         'Public Works Initial (Waiting)',
         'Public Works Initial (Service)',
         'Public Works Recheck (Waiting)',
         'Public Works Recheck (Service)',
-        'Fire Review (Waiting)',
-        'Fire Review (Service)',
-        'Public Health (Waiting)',
-        'Public Health (Service)',
+        'Fire Review Initial (Waiting)',
+        'Fire Review Initial (Service)',
+        'Fire Review Recheck (Waiting)',
+        'Fire Review Recheck (Service)',
+        'Public Health Initial (Waiting)',
+        'Public Health Initial (Service)',
+        'Public Health Recheck (Waiting)',
+        'Public Health Recheck (Service)',
         'Miscellaneous (Waiting)',
         'Miscellaneous (Service)',
     ]
@@ -586,16 +621,22 @@ def plot_time_by_segment_like_for_like(permits: List[Permit], figsize=(12, 6)):
         'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
-        'Planning (Waiting)',
-        'Planning (Service)',
+        'Planning Initial (Waiting)',
+        'Planning Initial (Service)',
+        'Planning Recheck (Waiting)',
+        'Planning Recheck (Service)',
         'Public Works Initial (Waiting)',
         'Public Works Initial (Service)',
         'Public Works Recheck (Waiting)',
         'Public Works Recheck (Service)',
-        'Fire Review (Waiting)',
-        'Fire Review (Service)',
-        'Public Health (Waiting)',
-        'Public Health (Service)',
+        'Fire Review Initial (Waiting)',
+        'Fire Review Initial (Service)',
+        'Fire Review Recheck (Waiting)',
+        'Fire Review Recheck (Service)',
+        'Public Health Initial (Waiting)',
+        'Public Health Initial (Service)',
+        'Public Health Recheck (Waiting)',
+        'Public Health Recheck (Service)',
         'Miscellaneous (Waiting)',
         'Miscellaneous (Service)',
     ]
@@ -711,16 +752,22 @@ def plot_time_by_segment_non_like_for_like(permits: List[Permit], figsize=(12, 6
         'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
-        'Planning (Waiting)',
-        'Planning (Service)',
+        'Planning Initial (Waiting)',
+        'Planning Initial (Service)',
+        'Planning Recheck (Waiting)',
+        'Planning Recheck (Service)',
         'Public Works Initial (Waiting)',
         'Public Works Initial (Service)',
         'Public Works Recheck (Waiting)',
         'Public Works Recheck (Service)',
-        'Fire Review (Waiting)',
-        'Fire Review (Service)',
-        'Public Health (Waiting)',
-        'Public Health (Service)',
+        'Fire Review Initial (Waiting)',
+        'Fire Review Initial (Service)',
+        'Fire Review Recheck (Waiting)',
+        'Fire Review Recheck (Service)',
+        'Public Health Initial (Waiting)',
+        'Public Health Initial (Service)',
+        'Public Health Recheck (Waiting)',
+        'Public Health Recheck (Service)',
         'Miscellaneous (Waiting)',
         'Miscellaneous (Service)',
     ]
