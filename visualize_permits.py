@@ -6,7 +6,7 @@ Creates various charts showing time spent in each stage of the process.
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
-from typing import List
+from typing import List, Optional
 from permit_simulation import Permit
 
 
@@ -322,6 +322,216 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
     plt.tight_layout()
     
     return fig, ax
+
+
+def _gantt_intervals_from_permit(permit: Permit):
+    """
+    Extract (start, end, label, color, is_waiting) for each activity interval from a permit.
+    Returns a list of tuples. Waiting and service are separate intervals where applicable.
+    """
+    intervals = []
+    # Stages: (label, request_attr, service_start_attr, end_attr, waiting_color, service_color)
+    stages_info = [
+        ('EPA Debris', 'epa_debris_request', 'epa_debris_service_start', 'epa_debris_end', '#FFB3B3', '#FF6B6B'),
+        ('USACE Debris', 'usace_debris_request', 'usace_debris_service_start', 'usace_debris_end', '#FFC2A6', '#FF8C5A'),
+        ('Authorization', 'authorization_start', None, 'authorization_end', None, '#4ECDC4'),
+        ('Plan Preparation', 'plan_prep_start', None, 'plan_prep_end', None, '#45B7D1'),
+        ('Planning', 'planning_request', 'planning_service_start', 'planning_end', '#FFD4B3', '#FFA07A'),
+        ('Miscellaneous', 'misc_request', 'misc_service_start', 'misc_end', '#D4A5A5', '#C08080'),
+        ('Public Works', 'public_works_request', 'public_works_service_start', 'public_works_end', '#C8E8D8', '#98D8C8'),
+        ('Fire Review', 'fire_review_request', 'fire_review_service_start', 'fire_review_end', '#FBF3B3', '#F7DC6F'),
+        ('Public Health', 'public_health_request', 'public_health_service_start', 'public_health_end', '#E0C8E8', '#BB8FCE'),
+    ]
+    for stage_name, request_attr, service_start_attr, end_attr, waiting_color, service_color in stages_info:
+        request_time = getattr(permit, request_attr, None) if request_attr else None
+        service_start_time = getattr(permit, service_start_attr, None) if service_start_attr else None
+        end_time = getattr(permit, end_attr, None) if end_attr else None
+        if request_time is None or end_time is None:
+            continue
+        if service_start_attr and service_start_time is not None:
+            wait_dur = service_start_time - request_time
+            if wait_dur > 0.001 and waiting_color:
+                intervals.append((request_time, service_start_time, f'{stage_name} (waiting)', waiting_color, True))
+            if end_time - service_start_time > 0 and service_color:
+                intervals.append((service_start_time, end_time, f'{stage_name} (service)', service_color, False))
+        else:
+            if end_time - request_time > 0 and service_color:
+                intervals.append((request_time, end_time, stage_name, service_color, False))
+    return intervals
+
+
+def _assign_lanes(intervals):
+    """
+    Assign each interval to a lane (row) so that overlapping intervals are on different lanes.
+    intervals: list of (start, end, label, color, is_waiting).
+    Returns: list of lanes; each lane is a list of (start, end, label, color, is_waiting).
+    """
+    # Sort by start time, then by end time
+    sorted_intervals = sorted(intervals, key=lambda x: (x[0], x[1]))
+    lanes = []  # lanes[i] = list of (start, end, label, color, is_waiting)
+    for iv in sorted_intervals:
+        start, end, label, color, is_waiting = iv
+        placed = False
+        for lane_idx, lane in enumerate(lanes):
+            if not any(s < end and e > start for s, e, *_ in lane):
+                lane.append(iv)
+                placed = True
+                break
+        if not placed:
+            lanes.append([iv])
+    return lanes
+
+
+def plot_gantt_single_permit(
+    permit: Permit,
+    figsize=(14, 8),
+    title: str = None,
+):
+    """
+    Create a Gantt chart for a single permit with parallel activities on separate rows
+    so that overlapping activities are visible on different bars.
+
+    Args:
+        permit: Single Permit object
+        figsize: Figure size tuple
+        title: Optional chart title (default: "Permit {id} (Segment {segment})")
+    """
+    intervals = _gantt_intervals_from_permit(permit)
+    if not intervals:
+        print("No activity intervals found for this permit.")
+        return None, None
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Define the four fixed rows the user requested
+    row_definitions = [
+        ("Debris: EPA & USACE", ["EPA Debris", "USACE Debris"]),
+        # Include Authorization and Plan Preparation with planning-related row
+        ("Planning / Misc / Public Works", ["Authorization", "Plan Preparation", "Planning", "Miscellaneous", "Public Works"]),
+        ("Fire Review", ["Fire Review"]),
+        ("Public Health Review", ["Public Health"]),
+    ]
+    n_rows = len(row_definitions)
+    y_positions = list(range(n_rows))
+    # We'll place Debris at the top, then Planning/Misc/Public Works,
+    # then Fire Review, and Public Health at the bottom.
+    row_labels = [""] * n_rows
+
+    # Map base stage name -> logical row index, and build labels by display index
+    stage_to_row = {}
+    for idx, (row_name, stages) in enumerate(row_definitions):
+        display_y = n_rows - 1 - idx  # invert so first definition is topmost
+        row_labels[display_y] = row_name
+        for s in stages:
+            stage_to_row[s] = idx
+
+    bar_height = 0.6
+
+    # Define canonical order for legend (match stages_info from _gantt_intervals_from_permit)
+    legend_order = [
+        ('EPA Debris (waiting)', True), ('EPA Debris (service)', False),
+        ('USACE Debris (waiting)', True), ('USACE Debris (service)', False),
+        ('Authorization', False), ('Plan Preparation', False),
+        ('Planning (waiting)', True), ('Planning (service)', False),
+        ('Miscellaneous (waiting)', True), ('Miscellaneous (service)', False),
+        ('Public Works (waiting)', True), ('Public Works (service)', False),
+        ('Fire Review (waiting)', True), ('Fire Review (service)', False),
+        ('Public Health (waiting)', True), ('Public Health (service)', False),
+    ]
+    seen = set()  # (label, is_waiting)
+    label_to_color = {}  # (label, is_waiting) -> color
+    for start, end, label, color, is_waiting in intervals:
+        key = (label, is_waiting)
+        if key not in seen:
+            seen.add(key)
+            label_to_color[key] = color
+
+    # Plot each interval on the appropriate fixed row
+    for start, end, label, color, is_waiting in intervals:
+        duration = end - start
+        if duration <= 0:
+            continue
+        base = label.replace(" (waiting)", "").replace(" (service)", "")
+        logical_row = stage_to_row.get(base)
+        if logical_row is None:
+            # Skip stages that are not in the four requested rows
+            continue
+        # Map logical row (0 = Debris, 1 = Planning/Misc/PW, 2 = Fire, 3 = Public Health)
+        # to display coordinate so Debris is at the top.
+        y_pos = n_rows - 1 - logical_row
+        hatch = "///" if is_waiting else None
+        alpha = 0.6 if is_waiting else 0.9
+        ax.barh(
+            y_pos,
+            duration,
+            left=start,
+            height=bar_height,
+            color=color,
+            alpha=alpha,
+            edgecolor="black",
+            linewidth=0.5,
+            hatch=hatch,
+        )
+
+    # Build legend in canonical order, only for labels that appear in this permit
+    legend_handles = []
+    for label, is_waiting in legend_order:
+        key = (label, is_waiting)
+        if key not in label_to_color:
+            continue
+        color = label_to_color[key]
+        hatch = "///" if is_waiting else None
+        alpha = 0.6 if is_waiting else 0.9
+        patch = mpatches.Patch(
+            facecolor=color,
+            alpha=alpha,
+            edgecolor="black",
+            linewidth=0.5,
+            hatch=hatch,
+            label=label,
+        )
+        legend_handles.append(patch)
+    ax.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=9)
+
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(row_labels, fontsize=9)
+    ax.set_xlabel('Time (days)', fontsize=12)
+    if title is None:
+        title = f"Gantt: Permit {permit.permit_id} ({permit.segment.name})"
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.grid(axis='x', alpha=0.3)
+    plt.tight_layout()
+    return fig, ax
+
+
+def plot_gantt_one_random_permit_segment(
+    permits: List[Permit],
+    segment_value: int = 4,
+    random_seed: Optional[int] = None,
+    figsize=(14, 8),
+):
+    """
+    Plot a Gantt chart for one random permit in the given segment.
+    Segment 4 = CUSTOM_NON_LIKE. Parallel activities are shown on separate rows.
+
+    Args:
+        permits: List of completed Permit objects
+        segment_value: Segment enum value (default 4 = CUSTOM_NON_LIKE)
+        random_seed: Optional seed for reproducible random choice
+        figsize: Figure size tuple
+    """
+    from permit_simulation import Segment
+    try:
+        segment = Segment(segment_value)
+    except ValueError:
+        segment = Segment.CUSTOM_NON_LIKE
+    segment_permits = [p for p in permits if p.segment == segment]
+    if not segment_permits:
+        print(f"No permits found for segment {segment.name} (value {segment_value}).")
+        return None, None
+    rng = np.random.default_rng(random_seed)
+    permit = rng.choice(segment_permits)
+    return plot_gantt_single_permit(permit, figsize=figsize)
 
 
 def plot_gantt_chart(permits: List[Permit], max_permits: int = 30, figsize=(14, 10)):
@@ -986,6 +1196,80 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
         ax.set_xticklabels(labels, rotation=45, ha='right')
         ax.grid(axis='y', alpha=0.3)
     
+    plt.tight_layout()
+    return fig, ax
+
+
+def plot_median_total_time_by_process(
+    permits_by_process: dict,
+    figsize=(12, 6),
+):
+    """
+    Create a grouped bar chart of median total time (disaster to construction start)
+    by segment for Standard, Sequential, and Parallel process.
+
+    Args:
+        permits_by_process: Dict mapping process name (e.g. "Standard", "Sequential", "Parallel")
+            to list of completed Permit objects.
+        figsize: Figure size tuple.
+    """
+    from permit_simulation import Segment
+
+    segment_order = [
+        Segment.PRE_APPROVED_LIKE,
+        Segment.PRE_APPROVED_NON_LIKE,
+        Segment.CUSTOM_LIKE,
+        Segment.CUSTOM_NON_LIKE,
+        Segment.SELF_CERT_LIKE,
+        Segment.SELF_CERT_NON_LIKE,
+    ]
+
+    # Build median total time per (process, segment)
+    # permits_by_process: {"Standard": [permits], "Sequential": [permits], "Parallel": [permits]}
+    process_names = list(permits_by_process.keys())
+    medians = {pname: {} for pname in process_names}
+
+    for pname, permits in permits_by_process.items():
+        for seg in segment_order:
+            times = [
+                p.ready_for_construction - p.created_at
+                for p in permits
+                if p.segment == seg and p.ready_for_construction is not None
+            ]
+            medians[pname][seg] = float(np.median(times)) if times else np.nan
+
+    # Only include segments that have at least one non-NaN median across processes
+    segments_to_plot = [
+        seg for seg in segment_order
+        if any(not np.isnan(medians[p].get(seg, np.nan)) for p in process_names)
+    ]
+    if not segments_to_plot:
+        print("No segment data to plot.")
+        return None, None
+
+    labels = [s.name for s in segments_to_plot]
+    x = np.arange(len(labels))
+    width = 0.25
+    n_processes = len(process_names)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    colors = {"Standard": "#1565C0", "Sequential": "#2E7D32", "Parallel": "#EF6C00"}
+    for i, pname in enumerate(process_names):
+        offset = width * (i - (n_processes - 1) / 2)
+        values = [medians[pname].get(seg, np.nan) for seg in segments_to_plot]
+        values = [v if not np.isnan(v) else 0 for v in values]
+        color = colors.get(pname, "#888888")
+        ax.bar(x + offset, values, width, label=pname, color=color, alpha=0.85, edgecolor="black", linewidth=0.5)
+
+    ax.set_ylabel("Median total time (days)", fontsize=12)
+    ax.set_xlabel("Segment", fontsize=12)
+    ax.set_title("Median total time from disaster to construction start by segment", fontsize=14, fontweight="bold")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.legend(loc="upper right")
+    ax.grid(axis="y", alpha=0.3)
+
     plt.tight_layout()
     return fig, ax
 

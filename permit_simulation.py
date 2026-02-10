@@ -457,10 +457,10 @@ class PermitSimulation:
         debris_process = self.env.process(self.debris_removal_path(permit))
         
         # Path 2: Authorization and plan preparation
-        auth_process = self.env.process(self.authorization_path(permit))
+        plan_process = self.env.process(self.plan_path(permit))
         
         # Wait for both paths to complete
-        yield debris_process & auth_process
+        yield debris_process & plan_process
         
         # Planning department (skipped for segments 5&6) - loop until approved
         yield self.env.process(self.planning_until_approved(permit))
@@ -502,7 +502,8 @@ class PermitSimulation:
         yield self.env.process(self.debris_removal_path(permit))
         
         # Then authorization and plan preparation
-        yield self.env.process(self.authorization_path(permit))
+        yield self.env.process(self.securing_authorization(permit))
+        yield self.env.process(self.prepare_submit_plans(permit))
         
         # Planning department (skipped for segments 5&6) - loop until approved
         yield self.env.process(self.planning_until_approved(permit))
@@ -525,16 +526,43 @@ class PermitSimulation:
         self.completed_permits.append(permit)
         if permit.permit_id in self.in_progress_permits:
             del self.in_progress_permits[permit.permit_id]
+
+    def permit_process_parallel(self, permit: Permit):
+        """Alternative process flow for a single permit with maximum parallelism.
+        """
+        parallel_processes = []
+        parallel_processes.append(self.env.process(self.debris_removal_path(permit)))
+        parallel_processes.append(self.env.process(self.securing_authorization(permit)))
+        parallel_processes.append(self.env.process(self.parallel_plan_reviews(permit)))
+        yield simpy.AllOf(self.env, parallel_processes)
+        
+        # Ready for construction
+        permit.ready_for_construction = self.env.now
+        self.completed_permits.append(permit)
+        if permit.permit_id in self.in_progress_permits:
+            del self.in_progress_permits[permit.permit_id]
     
     def debris_removal_path(self, permit: Permit):
         """Debris removal path: EPA → USACE."""
         yield self.env.process(self.epa_debris_removal(permit))
         yield self.env.process(self.usace_debris_removal(permit))
     
-    def authorization_path(self, permit: Permit):
+    def plan_path(self, permit: Permit):
         """Authorization and plan preparation path."""
         yield self.env.process(self.securing_authorization(permit))
         yield self.env.process(self.prepare_submit_plans(permit))
+
+    def parallel_plan_reviews(self, permit: Permit):
+        """Parallel reviews path after plan submission."""
+        yield self.env.process(self.prepare_submit_plans(permit))
+        parallel_processes = []
+        parallel_processes.append(self.env.process(self.planning_until_approved(permit)))
+        parallel_processes.append(self.env.process(self.misc_permits(permit)))
+        parallel_processes.append(self.env.process(self.public_works_until_approved(permit)))
+        parallel_processes.append(self.env.process(self.fire_review_until_approved(permit)))
+        if random.random() < 0.013:
+            parallel_processes.append(self.env.process(self.public_health_review_until_approved(permit)))
+        yield simpy.AllOf(self.env, parallel_processes)
     
     def create_permit(self) -> Permit:
         """Create a new permit with a sampled segment."""

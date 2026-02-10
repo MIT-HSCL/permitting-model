@@ -13,7 +13,7 @@ def run_simulation(
     simulation_duration: float = None,
     random_seed: int = 42,
     inter_arrival_time: float = 1.0,  # days between permit arrivals
-    sequential: bool = False
+    sequential: str = "standard"
 ):
     """
     Run the permit simulation.
@@ -41,10 +41,14 @@ def run_simulation(
             
             permit = sim.create_permit()
             # Use sequential or parallel processing based on parameter
-            if sequential:
+            if sequential == "standard":
+                env.process(sim.permit_process(permit))
+            elif sequential == "parallel":
+                env.process(sim.permit_process_parallel(permit))
+            elif sequential == "sequential":
                 env.process(sim.permit_process_sequential(permit))
             else:
-                env.process(sim.permit_process(permit))
+                raise ValueError(f"Invalid sequential processing type: {sequential}")
             count += 1
             
             # Exponential inter-arrival time
