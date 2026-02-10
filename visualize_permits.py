@@ -404,10 +404,18 @@ def plot_gantt_single_permit(
     fig, ax = plt.subplots(figsize=figsize)
 
     # Define the four fixed rows the user requested
+    # Six fixed rows in logical order:
+    # 1) Debris removal
+    # 2) Authorization & Plan Preparation
+    # 3) Planning & Zoning (Planning + Miscellaneous)
+    # 4) Public Works
+    # 5) Fire
+    # 6) Public Health
     row_definitions = [
-        ("Debris: EPA & USACE", ["EPA Debris", "USACE Debris"]),
-        # Include Authorization and Plan Preparation with planning-related row
-        ("Planning / Misc / Public Works", ["Authorization", "Plan Preparation", "Planning", "Miscellaneous", "Public Works"]),
+        ("Debris removal", ["EPA Debris", "USACE Debris"]),
+        ("Authorization & Plan preparation", ["Authorization", "Plan Preparation"]),
+        ("Planning & zoning (incl. Misc.)", ["Planning", "Miscellaneous"]),
+        ("Public Works", ["Public Works"]),
         ("Fire Review", ["Fire Review"]),
         ("Public Health Review", ["Public Health"]),
     ]
@@ -532,117 +540,6 @@ def plot_gantt_one_random_permit_segment(
     rng = np.random.default_rng(random_seed)
     permit = rng.choice(segment_permits)
     return plot_gantt_single_permit(permit, figsize=figsize)
-
-
-def plot_gantt_chart(permits: List[Permit], max_permits: int = 30, figsize=(14, 10)):
-    """
-    Create a Gantt chart showing the timeline of each permit through the process.
-    
-    Args:
-        permits: List of Permit objects
-        max_permits: Maximum number of permits to display
-        figsize: Figure size tuple
-    """
-    display_permits = permits[:max_permits]
-    
-    # Define stages in sequential order (left to right) as they occur in the process
-    # Format: (name, request_attr, service_start_attr, end_attr, waiting_color, service_color)
-    stages_info = [
-        ('EPA Debris', 'epa_debris_request', 'epa_debris_service_start', 'epa_debris_end', '#FFB3B3', '#FF6B6B'),
-        ('USACE Debris', 'usace_debris_request', 'usace_debris_service_start', 'usace_debris_end', '#FFC2A6', '#FF8C5A'),
-        ('Authorization', 'authorization_start', None, 'authorization_end', None, '#4ECDC4'),
-        ('Plan Preparation', 'plan_prep_start', None, 'plan_prep_end', None, '#45B7D1'),
-        ('Planning', 'planning_request', 'planning_service_start', 'planning_end', '#FFD4B3', '#FFA07A'),
-        ('Miscellaneous', 'misc_request', 'misc_service_start', 'misc_end', '#D4A5A5', '#C08080'),
-        ('Public Works', 'public_works_request', 'public_works_service_start', 'public_works_end', '#C8E8D8', '#98D8C8'),
-        ('Fire Review', 'fire_review_request', 'fire_review_service_start', 'fire_review_end', '#FBF3B3', '#F7DC6F'),
-        ('Public Health', 'public_health_request', 'public_health_service_start', 'public_health_end', '#E0C8E8', '#BB8FCE'),
-    ]
-    
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    y_positions = list(range(len(display_permits)))
-    y_labels = [f"Permit {p.permit_id} ({p.segment.name})" for p in display_permits]
-    
-    # Plot each stage for each permit in sequential order
-    for i, permit in enumerate(display_permits):
-        y_pos = len(display_permits) - i - 1
-        
-        for stage_info in stages_info:
-            stage_name, request_attr, service_start_attr, end_attr, waiting_color, service_color = stage_info
-            
-            # Get timestamps for this stage
-            request_time = getattr(permit, request_attr, None) if request_attr else None
-            service_start_time = getattr(permit, service_start_attr, None) if service_start_attr else None
-            end_time = getattr(permit, end_attr, None) if end_attr else None
-            
-            # Skip if this stage doesn't exist for this permit
-            if request_time is None or end_time is None:
-                continue
-            
-            # Handle stages with waiting/service separation
-            if service_start_attr and service_start_time is not None:
-                # Show waiting time and service time separately
-                waiting_duration = service_start_time - request_time
-                service_duration = end_time - service_start_time
-                
-                # Always show waiting bar if there's any waiting time (even very small amounts)
-                if waiting_duration > 0.001:  # Small threshold to show even tiny waiting times
-                    ax.barh(y_pos, waiting_duration, left=request_time, height=0.6,
-                           color=waiting_color, alpha=0.6, edgecolor='black', 
-                           linewidth=0.5, hatch='///')
-                if service_duration > 0:
-                    ax.barh(y_pos, service_duration, left=service_start_time, height=0.6,
-                           color=service_color, alpha=0.8, edgecolor='black', linewidth=0.5)
-            else:
-                # No service start time (stages without waiting, like Authorization, Plan Prep)
-                duration = end_time - request_time
-                if duration > 0:
-                    ax.barh(y_pos, duration, left=request_time, height=0.6,
-                           color=service_color, alpha=0.8, edgecolor='black', linewidth=0.5,
-                           label=stage_name if i == 0 and stage_name not in [l.get_label() for l in ax.get_legend_handles_labels()[0] if hasattr(l, 'get_label')] else '')
-    
-    ax.set_yticks(y_positions)
-    ax.set_yticklabels(y_labels)
-    ax.set_xlabel('Time (days)', fontsize=12)
-    ax.set_title(f'Gantt Chart: Permit Processing Timeline (showing {len(display_permits)} permits)',
-                 fontsize=14, fontweight='bold')
-    ax.grid(axis='x', alpha=0.3)
-    
-    # Create legend - collect unique labels in order
-    legend_elements = []
-    seen_labels = set()
-    for stage_info in stages_info:
-        stage_name = stage_info[0]
-        waiting_color = stage_info[4]
-        service_color = stage_info[5]
-        
-        # Add waiting time entry if this stage has waiting
-        if waiting_color and f'{stage_name} (Waiting)' not in seen_labels:
-            legend_elements.append(mpatches.Patch(facecolor=waiting_color, alpha=0.6, 
-                                                 hatch='///', edgecolor='black', linewidth=0.5,
-                                                 label=f'{stage_name} (Waiting)'))
-            seen_labels.add(f'{stage_name} (Waiting)')
-        
-        # Add service time entry
-        if service_color and f'{stage_name} (Service)' not in seen_labels:
-            legend_elements.append(mpatches.Patch(facecolor=service_color, alpha=0.8, 
-                                                 edgecolor='black', linewidth=0.5,
-                                                 label=f'{stage_name} (Service)'))
-            seen_labels.add(f'{stage_name} (Service)')
-        
-        # For stages without waiting (like Authorization, Plan Prep), add a single entry
-        if not waiting_color and service_color and stage_name not in seen_labels:
-            legend_elements.append(mpatches.Patch(facecolor=service_color, alpha=0.8, 
-                                                 edgecolor='black', linewidth=0.5,
-                                                 label=stage_name))
-            seen_labels.add(stage_name)
-    
-    ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1, 1))
-    
-    plt.tight_layout()
-    
-    return fig, ax
 
 
 def plot_average_time_by_stage(permits: List[Permit], figsize=(10, 6)):
@@ -1390,53 +1287,47 @@ def visualize_all(permits: List[Permit], save_prefix: str = None, show: bool = T
         fig1.savefig(f"{save_prefix}_stacked_bar.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_stacked_bar.png")
     
-    # 2. Gantt chart
-    print("  Creating Gantt chart...")
-    fig2, _ = plot_gantt_chart(permits, max_permits=30)
-    if save_prefix:
-        fig2.savefig(f"{save_prefix}_gantt.png", dpi=300, bbox_inches='tight')
-        print(f"    Saved: {save_prefix}_gantt.png")
     
-    # 3. Average time by stage
+    # 2. Average time by stage
     print("  Creating average time by stage chart...")
-    fig3, _ = plot_average_time_by_stage(permits)
+    fig2, _ = plot_average_time_by_stage(permits)
     if save_prefix:
-        fig3.savefig(f"{save_prefix}_average_by_stage.png", dpi=300, bbox_inches='tight')
+        fig2.savefig(f"{save_prefix}_average_by_stage.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_average_by_stage.png")
     
-    # 4. Time by segment (all segments)
+    # 3. Time by segment (all segments)
     print("  Creating time by segment chart...")
-    fig4, _ = plot_time_by_segment(permits)
+    fig3, _ = plot_time_by_segment(permits)
     if save_prefix:
-        fig4.savefig(f"{save_prefix}_by_segment.png", dpi=300, bbox_inches='tight')
+        fig3.savefig(f"{save_prefix}_by_segment.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_by_segment.png")
     
-    # 5. Time by segment - Like-for-like only
+    # 4. Time by segment - Like-for-like only
     print("  Creating time by segment chart (Like-for-like only)...")
-    fig5, _ = plot_time_by_segment_like_for_like(permits)
-    if save_prefix and fig5:
-        fig5.savefig(f"{save_prefix}_by_segment_like_for_like.png", dpi=300, bbox_inches='tight')
+    fig4, _ = plot_time_by_segment_like_for_like(permits)
+    if save_prefix and fig4:
+        fig4.savefig(f"{save_prefix}_by_segment_like_for_like.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_by_segment_like_for_like.png")
     
-    # 6. Time by segment - Non-like-for-like only
+    # 5. Time by segment - Non-like-for-like only
     print("  Creating time by segment chart (Non-like-for-like only)...")
-    fig6, _ = plot_time_by_segment_non_like_for_like(permits)
-    if save_prefix and fig6:
-        fig6.savefig(f"{save_prefix}_by_segment_non_like_for_like.png", dpi=300, bbox_inches='tight')
+    fig5, _ = plot_time_by_segment_non_like_for_like(permits)
+    if save_prefix and fig5:
+        fig5.savefig(f"{save_prefix}_by_segment_non_like_for_like.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_by_segment_non_like_for_like.png")
     
-    # 5. Total time by segment (box plot)
+    # 6. Total time by segment (box plot)
     print("  Creating total time by segment chart (box plot)...")
-    fig5, _ = plot_total_time_by_segment(permits)
-    if save_prefix and fig5:
-        fig5.savefig(f"{save_prefix}_total_time_by_segment.png", dpi=300, bbox_inches='tight')
+    fig6, _ = plot_total_time_by_segment(permits)
+    if save_prefix and fig6:
+        fig6.savefig(f"{save_prefix}_total_time_by_segment.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_total_time_by_segment.png")
 
     # 6. Average total waiting vs service by step
     print("  Creating waiting vs service by step chart...")
-    fig6, _ = plot_average_waiting_and_service_by_step(permits)
-    if save_prefix and fig6:
-        fig6.savefig(f"{save_prefix}_waiting_service_by_step.png", dpi=300, bbox_inches='tight')
+    fig7, _ = plot_average_waiting_and_service_by_step(permits)
+    if save_prefix and fig7:
+        fig7.savefig(f"{save_prefix}_waiting_service_by_step.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_waiting_service_by_step.png")
     
     if show:
