@@ -13,7 +13,11 @@ def run_simulation(
     simulation_duration: float = None,
     random_seed: int = 42,
     inter_arrival_time: float = 1.0,  # days between permit arrivals
-    sequential: str = "standard"
+    sequential: str = "standard",
+    pct_pre_approved: float = 0.02,
+    pct_custom: float = 0.90,
+    pct_self_cert: float = 0.08,
+    pct_like_for_like: float = 0.80,
 ):
     """
     Run the permit simulation.
@@ -23,10 +27,21 @@ def run_simulation(
         simulation_duration: Maximum simulation time in days (if None, runs until all permits complete)
         random_seed: Random seed for reproducibility
         inter_arrival_time: Average time between permit arrivals (days)
-        sequential: If True, uses sequential processing; if False, uses parallel processing (default)
+        sequential: Processing mode: \"standard\", \"parallel\", or \"sequential\".
+        pct_pre_approved: Fraction of permits that are pre-approved plans (0–1).
+        pct_custom: Fraction of permits that are custom builds (0–1).
+        pct_self_cert: Fraction of permits that are self-certification (0–1).
+        pct_like_for_like: Fraction of permits that are like-for-like (0–1).
     """
     env = simpy.Environment()
-    sim = PermitSimulation(env, random_seed=random_seed)
+    sim = PermitSimulation(
+        env,
+        random_seed=random_seed,
+        pct_pre_approved=pct_pre_approved,
+        pct_custom=pct_custom,
+        pct_self_cert=pct_self_cert,
+        pct_like_for_like=pct_like_for_like,
+    )
     
     def permit_generator():
         """Generate permits at specified intervals."""

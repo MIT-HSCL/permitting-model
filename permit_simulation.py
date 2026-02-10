@@ -99,11 +99,42 @@ class Permit:
 class PermitSimulation:
     """Main simulation class for the permitting process."""
     
-    def __init__(self, env: simpy.Environment, random_seed: int = 42):
+    def __init__(
+        self,
+        env: simpy.Environment,
+        random_seed: int = 42,
+        pct_pre_approved: float = 0.02,
+        pct_custom: float = 0.90,
+        pct_self_cert: float = 0.08,
+        pct_like_for_like: float = 0.80,
+    ):
+        """
+        Initialize the simulation.
+
+        Args:
+            env: SimPy Environment.
+            random_seed: Random seed for reproducibility.
+            pct_pre_approved: Share of permits that are pre-approved plans (0–1 fraction).
+            pct_custom: Share of permits that are custom builds (0–1 fraction).
+            pct_self_cert: Share of permits that are self-certification (0–1 fraction).
+            pct_like_for_like: Share of permits that are like-for-like (0–1 fraction).
+
+        Notes:
+            - pct_pre_approved + pct_custom + pct_self_cert do not have to sum to 1.0
+              exactly; they are used as weights and normalized internally.
+            - pct_like_for_like controls the global probability that a permit is
+              like-for-like vs non-like-for-like across all plan types.
+        """
         self.env = env
         self.random_seed = random_seed
         random.seed(random_seed)
         np.random.seed(random_seed)
+
+        # Store segment mix parameters
+        self.pct_pre_approved = pct_pre_approved
+        self.pct_custom = pct_custom
+        self.pct_self_cert = pct_self_cert
+        self.pct_like_for_like = pct_like_for_like
         
         # Resource pools
         self.epa_debris_servers = simpy.Resource(env, capacity=160)
@@ -120,16 +151,26 @@ class PermitSimulation:
         self.permit_counter = 0
         
     def sample_segment(self) -> Segment:
-        """Sample a permit segment based on distribution.
-        Currently ~80% like-for-like, ~20% non-like-for-like.
-        Distribution across plan types not specified, using uniform.
         """
-        is_like_for_like = random.random() < 0.80
+        Sample a permit segment based on configured distributions.
+
+        By default this reproduces the previous behavior:
+        ~80% like-for-like vs 20% non-like-for-like, and
+        plan types split roughly as:
+            - 2% pre-approved
+            - 90% custom
+            - 8% self-certification.
+
+        These proportions can be overridden via the constructor or through
+        the `run_simulation` helper.
+        """
+        # Like-for-like vs non-like-for-like
+        is_like_for_like = random.random() < self.pct_like_for_like
         
-        # Randomly assign plan type (could be adjusted based on actual distribution)
+        # Plan type: pre_approved, custom, or self_cert
         plan_type = random.choices(
             ['pre_approved', 'custom', 'self_cert'],
-            weights=[0.02, 0.9, 0.08] 
+            weights=[self.pct_pre_approved, self.pct_custom, self.pct_self_cert],
         )[0]
         
         if plan_type == 'pre_approved':
@@ -544,6 +585,7 @@ class PermitSimulation:
     
     def debris_removal_path(self, permit: Permit):
         """Debris removal path: EPA → USACE."""
+        yield self.env.timeout(45) # 45 day wait for debris removal to start
         yield self.env.process(self.epa_debris_removal(permit))
         yield self.env.process(self.usace_debris_removal(permit))
     
