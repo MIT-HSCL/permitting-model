@@ -88,7 +88,7 @@ class Permit:
     public_health_initial_service: float = 0.0
     public_health_recheck_waiting: float = 0.0
     public_health_recheck_service: float = 0.0
-    # Miscellaneous permits
+    # Agency Referrals permits
     misc_request: Optional[float] = None
     misc_service_start: Optional[float] = None
     misc_end: Optional[float] = None
@@ -103,10 +103,12 @@ class PermitSimulation:
         self,
         env: simpy.Environment,
         random_seed: int = 42,
+        ai_review: str = "none",
         pct_pre_approved: float = 0.02,
         pct_custom: float = 0.90,
         pct_self_cert: float = 0.08,
         pct_like_for_like: float = 0.80,
+
     ):
         """
         Initialize the simulation.
@@ -114,6 +116,7 @@ class PermitSimulation:
         Args:
             env: SimPy Environment.
             random_seed: Random seed for reproducibility.
+            ai_review: AI review mode: "none", "initial_check", "full_review".
             pct_pre_approved: Share of permits that are pre-approved plans (0–1 fraction).
             pct_custom: Share of permits that are custom builds (0–1 fraction).
             pct_self_cert: Share of permits that are self-certification (0–1 fraction).
@@ -127,6 +130,7 @@ class PermitSimulation:
         """
         self.env = env
         self.random_seed = random_seed
+        self.ai_review = ai_review
         random.seed(random_seed)
         np.random.seed(random_seed)
 
@@ -271,12 +275,20 @@ class PermitSimulation:
             # Segments 1 & 3 (like-for-like) - N(3, 1) days
             if is_initial:
                 if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
-                    duration_days = self.sample_normal(9, 2)
+                    if self.ai_review == "none":
+                        duration_days = self.sample_normal(9, 2)
+                    elif self.ai_review == "initial_check":
+                        duration_days = self.sample_normal(6, 1)
+                    elif self.ai_review == "full_review":
+                        duration_days = self.sample_normal(1, 0.2)
                 else:  # Segments 1 & 3
                     duration_days = self.sample_normal(3, 1)
             else:
                 # Recheck uses shorter time
-                duration_days = self.sample_normal(2, 0.5)
+                if self.ai_review == "full_review":
+                    duration_days = self.sample_normal(1, 0.2)
+                else:
+                    duration_days = self.sample_normal(2, 0.5)
             
             yield self.env.timeout(duration_days)
             service_end_time = self.env.now
@@ -300,11 +312,11 @@ class PermitSimulation:
         return approved
 
     def misc_permits(self, permit: Permit):
-        """Miscellaneous permits administered by various other departments.
+        """Agency Referrals permits administered by various other departments.
         Segments 1, 3, and 5 (like-for-like) skip this step entirely.
         """
         if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.CUSTOM_LIKE, Segment.SELF_CERT_LIKE]:
-            # Skip miscellaneous permits if like-for-like
+            # Skip agency referrals if like-for-like
             return
         
         permit.misc_request = self.env.now
@@ -337,18 +349,28 @@ class PermitSimulation:
                 permit.public_works_initial_waiting += (service_start_time - request_time)
             else:
                 permit.public_works_recheck_waiting += (service_start_time - request_time)
-            # N(11.6, 2) days for non-pre-approved plans
-            # N(4, 1) days for pre-approved plans
             duration_days = self.sample_normal(8, 2)
-            duration_days_pre_approved = self.sample_normal(4, 1)
-            duration_days_recheck = self.sample_normal(4, 1)
+            duration_days_pre_approved = self.sample_normal(3, 1)
+            duration_days_recheck = self.sample_normal(3, 1)
+            duration_days_ai_review = self.sample_normal(1, 0.2)
             if is_initial:
-                if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
-                    yield self.env.timeout(duration_days_pre_approved)
+                if self.ai_review == "full_review":
+                    yield self.env.timeout(duration_days_ai_review)
+                elif self.ai_review == "initial_check":
+                    if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
+                        yield self.env.timeout(0.55*duration_days_pre_approved)
+                    else:
+                        yield self.env.timeout(0.55*duration_days)
                 else:
-                    yield self.env.timeout(duration_days)
+                    if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
+                        yield self.env.timeout(duration_days_pre_approved)
+                    else:
+                        yield self.env.timeout(duration_days)
             else:
-                yield self.env.timeout(duration_days_recheck)
+                if self.ai_review == "full_review":
+                    yield self.env.timeout(duration_days_ai_review)
+                else:
+                    yield self.env.timeout(duration_days_recheck)
             service_end_time = self.env.now
             if is_initial:
                 permit.public_works_initial_service += (service_end_time - service_start_time)
@@ -506,7 +528,7 @@ class PermitSimulation:
         # Planning department (skipped for segments 5&6) - loop until approved
         yield self.env.process(self.planning_until_approved(permit))
         
-        # Miscellaneous permits (for non-like-for-like segments 2, 4, 6)
+        # Agency Referrals permits (for non-like-for-like segments 2, 4, 6)
         # Runs sequentially between planning and public works
         yield self.env.process(self.misc_permits(permit))
         
@@ -549,7 +571,7 @@ class PermitSimulation:
         # Planning department (skipped for segments 5&6) - loop until approved
         yield self.env.process(self.planning_until_approved(permit))
         
-        # Miscellaneous permits (for non-like-for-like segments 2, 4, 6)
+        # Agency Referrals permits (for non-like-for-like segments 2, 4, 6)
         yield self.env.process(self.misc_permits(permit))
         
         # Building & Safety (Public Works) - loop until approved

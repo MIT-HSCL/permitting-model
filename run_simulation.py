@@ -14,6 +14,7 @@ def run_simulation(
     random_seed: int = 42,
     inter_arrival_time: float = 1.0,  # days between permit arrivals
     sequential: str = "standard",
+    ai_review: str = "none",
     pct_pre_approved: float = 0.02,
     pct_custom: float = 0.90,
     pct_self_cert: float = 0.08,
@@ -37,6 +38,7 @@ def run_simulation(
     sim = PermitSimulation(
         env,
         random_seed=random_seed,
+        ai_review=ai_review,
         pct_pre_approved=pct_pre_approved,
         pct_custom=pct_custom,
         pct_self_cert=pct_self_cert,
