@@ -245,7 +245,7 @@ class PermitSimulation:
         # Segments 1 & 2 (pre-approved plan) → N(10, 2) days
         # Segments 3-6 (custom-builds) → lognormal dist with median 150 and sigma = 0.6 days
         if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
-            duration_days = self.sample_normal(10, 2)
+            duration_days = self.sample_normal(30, 20)
         else:  # Segments 3-6
             duration_days = self.sample_lognormal(150, 0.6)
         
@@ -275,14 +275,13 @@ class PermitSimulation:
             # Segments 1 & 3 (like-for-like) - N(3, 1) days
             if is_initial:
                 if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
-                    if self.ai_review == "none":
-                        duration_days = self.sample_normal(9, 2)
-                    elif self.ai_review == "initial_check":
-                        duration_days = self.sample_normal(6, 1)
-                    elif self.ai_review == "full_review":
-                        duration_days = self.sample_normal(1, 0.2)
-                else:  # Segments 1 & 3
-                    duration_days = self.sample_normal(3, 1)
+                    duration_days = self.sample_normal(5, 0.25)
+                else:  # like-for-like
+                    duration_days = self.sample_normal(2, 0.5)
+                if self.ai_review == "initial_check":
+                    duration_days = duration_days * 0.7
+                elif self.ai_review == "full_review":
+                    duration_days = duration_days * 0.1
             else:
                 # Recheck uses shorter time
                 if self.ai_review == "full_review":
@@ -300,6 +299,7 @@ class PermitSimulation:
         if permit.planning_rechecks == 0:
             # 25% approved, 75% need re-check
             approved = random.random() < 0.25
+            is_initial = False
         else:
             # 95% approved, 5% need re-check if has already been rechecked
             approved = random.random() < 0.95
@@ -350,27 +350,25 @@ class PermitSimulation:
             else:
                 permit.public_works_recheck_waiting += (service_start_time - request_time)
             duration_days = self.sample_normal(8, 2)
-            duration_days_pre_approved = self.sample_normal(3, 1)
-            duration_days_recheck = self.sample_normal(3, 1)
-            duration_days_ai_review = self.sample_normal(1, 0.2)
+            duration_days_pre_approved = self.sample_normal(1, 0.5)
+            duration_days_recheck = self.sample_normal(1, 0.5)
             if is_initial:
-                if self.ai_review == "full_review":
-                    yield self.env.timeout(duration_days_ai_review)
-                elif self.ai_review == "initial_check":
-                    if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
-                        yield self.env.timeout(0.55*duration_days_pre_approved)
-                    else:
-                        yield self.env.timeout(0.55*duration_days)
+                if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE, Segment.SELF_CERT_LIKE, Segment.SELF_CERT_NON_LIKE]:
+                    if self.ai_review == "initial_check":
+                        duration_days_pre_approved = duration_days_pre_approved * 0.7
+                    elif self.ai_review == "full_review":
+                        duration_days_pre_approved = duration_days_pre_approved * 0.1
+                    yield self.env.timeout(duration_days_pre_approved)
                 else:
-                    if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
-                        yield self.env.timeout(duration_days_pre_approved)
-                    else:
-                        yield self.env.timeout(duration_days)
+                    if self.ai_review == "initial_check":
+                        duration_days = duration_days * 0.7
+                    elif self.ai_review == "full_review":
+                        duration_days = duration_days * 0.1
+                    yield self.env.timeout(duration_days)
             else:
                 if self.ai_review == "full_review":
-                    yield self.env.timeout(duration_days_ai_review)
-                else:
-                    yield self.env.timeout(duration_days_recheck)
+                    duration_days_recheck = duration_days_recheck * 0.1
+                yield self.env.timeout(duration_days_recheck)
             service_end_time = self.env.now
             if is_initial:
                 permit.public_works_initial_service += (service_end_time - service_start_time)
@@ -380,6 +378,7 @@ class PermitSimulation:
         if permit.public_works_rechecks == 0:
             # 25% approved, 75% need re-check
             approved = random.random() < 0.25
+            is_initial = False
         else:
             # 95% approved, 5% need re-check if has already been rechecked
             approved = random.random() < 0.95
@@ -443,7 +442,7 @@ class PermitSimulation:
                     duration_days = self.sample_normal(1, 0.2)
                 else:
                     # Detailed review: ~13 days (normal distribution around 13 days)
-                    duration_days = self.sample_normal(13, 2)
+                    duration_days = self.sample_normal(8, 2)
             else:
                 # Recheck uses shorter time
                 duration_days = self.sample_normal(2, 0.5)
@@ -457,6 +456,7 @@ class PermitSimulation:
         if permit.fire_rechecks == 0:
             # 25% approved, 75% need re-check
             approved = random.random() < 0.25
+            is_initial = False
         else:
             # 95% approved, 5% need re-check if has already been rechecked
             approved = random.random() < 0.95
@@ -502,6 +502,7 @@ class PermitSimulation:
         if permit.public_health_rechecks == 0:
             # 25% approved, 75% need re-check
             approved = random.random() < 0.25
+            is_initial = False
         else:
             # 95% approved, 5% need re-check if has already been rechecked
             approved = random.random() < 0.95

@@ -383,7 +383,9 @@ def _assign_lanes(intervals):
 
 
 def plot_gantt_single_permit(
-    permit: Permit,
+    permit: Permit = None,
+    permits: List[Permit] = None,
+    permit_id: Optional[int] = None,
     figsize=(14, 5),
     title: str = None,
 ):
@@ -392,11 +394,26 @@ def plot_gantt_single_permit(
     so that overlapping activities are visible on different bars.
 
     Args:
-        permit: Single Permit object
+        permit: Single Permit object (use this when you have the permit directly)
+        permits: List of permits (use with permit_id to look up by ID)
+        permit_id: Permit ID to look up from permits list (use with permits)
         figsize: Figure size tuple
         title: Optional chart title (default: "Permit {id} (Segment {segment})")
+
+    Note: completed_permits is ordered by completion time, not permit_id. Use permit_id
+    to plot a specific permit by its ID, e.g. plot_gantt_single_permit(permits=sim.completed_permits, permit_id=237)
     """
-    intervals = _gantt_intervals_from_permit(permit)
+    if permit is not None:
+        p = permit
+    elif permits is not None and permit_id is not None:
+        p = next((x for x in permits if x.permit_id == permit_id), None)
+        if p is None:
+            print(f"No permit found with permit_id={permit_id}. Available IDs: {[x.permit_id for x in permits[:10]]}...")
+            return None, None
+    else:
+        raise ValueError("Provide either permit= or (permits=, permit_id=)")
+
+    intervals = _gantt_intervals_from_permit(p)
     if not intervals:
         print("No activity intervals found for this permit.")
         return None, None
@@ -412,8 +429,8 @@ def plot_gantt_single_permit(
     # 5) Fire
     # 6) Public Health
     row_definitions = [
-        ("Debris removal", ["EPA Debris", "USACE Debris"]),
-        ("Authorization & Plan preparation", ["Authorization", "Plan Preparation"]),
+        ("Remove debris", ["EPA Debris", "USACE Debris"]),
+        ("Secure financing & prepare plans", ["Authorization", "Plan Preparation"]),
         ("Permit reviews", ["Planning", "Agency Referrals", "Public Works"]),
         ("Fire Review", ["Fire Review"])
     ]
@@ -435,8 +452,8 @@ def plot_gantt_single_permit(
 
     # Define canonical order for legend (match stages_info from _gantt_intervals_from_permit)
     legend_order = [
-        ('Debris removal (waiting)', True), ('Debris removal (service)', False),
-        ('Authorization & Plan Preparation', False),
+        ('Remove debris (waiting)', True), ('Remove debris (service)', False),
+        ('Secure financing & prepare plans', False),
         ('Permit reviews (waiting)', True), ('Permit reviews (service)', False),
     ]
     seen = set()  # (label, is_waiting)
@@ -498,7 +515,7 @@ def plot_gantt_single_permit(
     ax.set_yticklabels(row_labels, fontsize=16)
     ax.set_xlabel('Time (days)', fontsize=18)
     if title is None:
-        title = f"Gantt: Permit {permit.permit_id} ({permit.segment.name})"
+        title = f"Gantt: Permit {p.permit_id} ({p.segment.name})"
     ax.set_title(title, fontsize=20, fontweight='bold')
     ax.tick_params(axis='x', labelsize=15)
     ax.grid(axis='x', alpha=0.3)
@@ -1258,7 +1275,7 @@ def plot_total_time_by_segment_quartiles(permits: List[Permit], figsize=(10, 6))
         return None, None
 
     segments = list(segment_data.keys())
-    labels = ["Pre-approved like", "Pre-approved non-like", "Custom like", "Custom non-like", "Self-certified like", "Self-certified non-like"]
+    labels = ["Custom like", "Pre-approved like", "Self-certified like", "Custom non-like", "Pre-approved non-like", "Self-certified non-like"]
 
     medians = [np.median(segment_data[s]) for s in segments]
     p25 = [np.percentile(segment_data[s], 25) for s in segments]
@@ -1270,9 +1287,16 @@ def plot_total_time_by_segment_quartiles(permits: List[Permit], figsize=(10, 6))
     yerr = [yerr_lower, yerr_upper]
 
     fig, ax = plt.subplots(figsize=figsize)
-    colors = ['#2E7D32', '#81C784', '#1565C0', '#90CAF9', '#EF6C00', '#FFB74D']
+    colors = ['#1565C0', '#2E7D32', '#EF6C00', '#90CAF9', '#81C784' , '#FFB74D']
     x = np.arange(len(segments))
     bars = ax.bar(x, medians, yerr=yerr, capsize=5, color=colors[:len(segments)], alpha=0.8, edgecolor='black')
+
+    # Overlay outlier points (above 75th percentile only) in a straight line
+    for i, s in enumerate(segments):
+        times = np.array(segment_data[s])
+        outliers = times[times > p75[i]]
+        if len(outliers) > 0:
+            ax.scatter(np.full(len(outliers), x[i]), outliers, color='black', alpha=0.4, s=20, zorder=5)
 
     # Add sample size (n)
     for i, s in enumerate(segments):
@@ -1311,11 +1335,11 @@ def plot_median_total_time_by_process(
     from permit_simulation import Segment
 
     segment_order = [
-        Segment.PRE_APPROVED_LIKE,
-        Segment.PRE_APPROVED_NON_LIKE,
         Segment.CUSTOM_LIKE,
-        Segment.CUSTOM_NON_LIKE,
+        Segment.PRE_APPROVED_LIKE,
         Segment.SELF_CERT_LIKE,
+        Segment.CUSTOM_NON_LIKE,
+        Segment.PRE_APPROVED_NON_LIKE,
         Segment.SELF_CERT_NON_LIKE,
     ]
 
@@ -1342,14 +1366,20 @@ def plot_median_total_time_by_process(
         print("No segment data to plot.")
         return None, None
 
-    labels = [s.name for s in segments_to_plot]
+    labels = ["Custom like", "Pre-approved like", "Self-certified like", "Custom non-like", "Pre-approved non-like", "Self-certified non-like"]
     x = np.arange(len(labels))
     width = 0.25
     n_processes = len(process_names)
 
     fig, ax = plt.subplots(figsize=figsize)
 
-    colors = {"Standard": "#1565C0", "Sequential": "#2E7D32", "Parallel": "#EF6C00"}
+    colors = {
+        "Standard": "#42A5F5",
+        "Sequential": "#FFB74D",
+        "Parallel": "#66BB6A",
+        "Initial AI Check": "#FFB74D",
+        "Full AI Review": "#66BB6A",
+    }
     for i, pname in enumerate(process_names):
         offset = width * (i - (n_processes - 1) / 2)
         values = [medians[pname].get(seg, np.nan) for seg in segments_to_plot]
@@ -1362,7 +1392,7 @@ def plot_median_total_time_by_process(
     ax.set_title("Median total time from disaster to construction start by segment", fontsize=14, fontweight="bold")
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=45, ha="right")
-    ax.legend(loc="upper right")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=11)
     ax.grid(axis="y", alpha=0.3)
 
     plt.tight_layout()
@@ -1370,12 +1400,22 @@ def plot_median_total_time_by_process(
 
 
 def plot_average_waiting_and_service_by_step(
-    permits: List[Permit], figsize=(10, 6)
+    permits: List[Permit],
+    figsize=(10, 6),
+    label_map: Optional[dict] = None,
 ):
     """
     Create a bar chart showing average total waiting vs service time for each
     major process step (EPA, USACE, Planning, Public Works, etc.), with
     initial and recheck times aggregated together.
+
+    Args:
+        permits: List of Permit objects
+        figsize: Figure size tuple
+        label_map: Optional dict mapping internal step name to display label.
+                   Internal names: EPA Debris, USACE Debris, Authorization,
+                   Plan Preparation, Planning, Agency Referrals, Public Works,
+                   Fire Review, Public Health.
     """
     if not permits:
         print("No permits provided for waiting/service by step chart.")
@@ -1395,7 +1435,7 @@ def plot_average_waiting_and_service_by_step(
         print("No step data found for waiting/service chart.")
         return None, None
 
-    # Define preferred order to match process flow
+    # Define preferred order to match process flow (keys from calculate_step_waiting_service_totals)
     preferred_order = [
         "EPA Debris",
         "USACE Debris",
@@ -1459,7 +1499,10 @@ def plot_average_waiting_and_service_by_step(
         fontweight="bold",
     )
     ax.set_xticks(x)
-    ax.set_xticklabels(steps, rotation=45, ha="right")
+    default_labels = {"Authorization": "Secure financing"}
+    merged_labels = {**default_labels, **(label_map or {})}
+    display_labels = [merged_labels.get(s, s) for s in steps]
+    ax.set_xticklabels(display_labels, rotation=45, ha="right")
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
 
