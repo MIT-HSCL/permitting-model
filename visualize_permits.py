@@ -1204,8 +1204,25 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
         print("No data to plot for total time by segment.")
         return None, None
     
-    segments = list(segment_data.keys())
-    labels = [s.name for s in segments]
+    # Use stable segment order and friendly labels (match quartiles plot)
+    segment_order = [
+        Segment.CUSTOM_LIKE,
+        Segment.PRE_APPROVED_LIKE,
+        Segment.SELF_CERT_LIKE,
+        Segment.CUSTOM_NON_LIKE,
+        Segment.PRE_APPROVED_NON_LIKE,
+        Segment.SELF_CERT_NON_LIKE,
+    ]
+    label_by_segment = {
+        Segment.PRE_APPROVED_LIKE: "Pre-approved like",
+        Segment.PRE_APPROVED_NON_LIKE: "Pre-approved non-like",
+        Segment.CUSTOM_LIKE: "Custom like",
+        Segment.CUSTOM_NON_LIKE: "Custom non-like",
+        Segment.SELF_CERT_LIKE: "Self-certified like",
+        Segment.SELF_CERT_NON_LIKE: "Self-certified non-like",
+    }
+    segments = [s for s in segment_order if s in segment_data]
+    labels = [label_by_segment[s] for s in segments]
     
     fig, ax = plt.subplots(figsize=figsize)
     
@@ -1214,8 +1231,8 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
         bp = ax.boxplot(data, patch_artist=True, vert=True, showmeans=True, 
                         medianprops={'color': 'red'}, meanprops={'marker': 'o', 'markeredgecolor': 'black', 'markerfacecolor': 'green'})
         
-        # Add colors to box plots
-        colors = ['#2E7D32', '#81C784', '#1565C0', '#90CAF9', '#EF6C00', '#FFB74D']
+        # Add colors to box plots (match quartiles chart: Custom like, Pre-approved like, Self-cert like, then non-like)
+        colors = ['#1565C0', '#2E7D32', '#EF6C00', '#90CAF9', '#81C784', '#FFB74D']
         for patch, color in zip(bp['boxes'], colors[:len(segments)]):
             patch.set_facecolor(color)
         
@@ -1226,11 +1243,15 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
             ax.text(i + 1, np.max(data[i]) + 0.05 * (np.max(data[i]) - np.min(data[i])), f'n={count}',
                     horizontalalignment='center', verticalalignment='bottom', fontsize=9, color='gray')
         
-        # Add dashed reference lines for 1 year and 2 years
+        # Add dashed reference lines for 1 year and 2 years with text labels
         one_year = 365
         two_years = 730
-        ax.axhline(y=one_year, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label='1 Year')
-        ax.axhline(y=two_years, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label='2 Years')
+        ax.axhline(y=one_year, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+        ax.axhline(y=two_years, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+        ax.text(1.02, one_year, ' 1 Year', transform=ax.get_yaxis_transform(), ha='left', va='center',
+                fontsize=10, color='gray', alpha=0.8)
+        ax.text(1.02, two_years, ' 2 Years', transform=ax.get_yaxis_transform(), ha='left', va='center',
+                fontsize=10, color='gray', alpha=0.8)
         
         ax.set_ylabel('Total Time (days)', fontsize=12)
         ax.set_title('Total Time from Disaster to Construction Start by Segment (Box Plot)', fontsize=14, fontweight='bold')
@@ -1274,8 +1295,26 @@ def plot_total_time_by_segment_quartiles(permits: List[Permit], figsize=(10, 6))
         print("No data to plot for total time by segment.")
         return None, None
 
-    segments = list(segment_data.keys())
-    labels = ["Custom like", "Pre-approved like", "Self-certified like", "Custom non-like", "Pre-approved non-like", "Self-certified non-like"]
+    # Enforce a stable segment order so bars and labels always align.
+    segment_order = [
+        Segment.CUSTOM_LIKE,
+        Segment.PRE_APPROVED_LIKE,
+        Segment.SELF_CERT_LIKE,
+        Segment.CUSTOM_NON_LIKE,
+        Segment.PRE_APPROVED_NON_LIKE,
+        Segment.SELF_CERT_NON_LIKE,
+    ]
+    label_by_segment = {
+        Segment.CUSTOM_LIKE: "Custom like",
+        Segment.PRE_APPROVED_LIKE: "Pre-approved like",
+        Segment.SELF_CERT_LIKE: "Self-certified like",
+        Segment.CUSTOM_NON_LIKE: "Custom non-like",
+        Segment.PRE_APPROVED_NON_LIKE: "Pre-approved non-like",
+        Segment.SELF_CERT_NON_LIKE: "Self-certified non-like",
+    }
+
+    segments = [s for s in segment_order if s in segment_data]
+    labels = [label_by_segment[s] for s in segments]
 
     medians = [np.median(segment_data[s]) for s in segments]
     p25 = [np.percentile(segment_data[s], 25) for s in segments]
@@ -1374,11 +1413,11 @@ def plot_median_total_time_by_process(
     fig, ax = plt.subplots(figsize=figsize)
 
     colors = {
-        "Standard": "#42A5F5",
-        "Sequential": "#FFB74D",
-        "Parallel": "#66BB6A",
-        "Initial AI Check": "#FFB74D",
-        "Full AI Review": "#66BB6A",
+        "Standard": "#1976D2",
+        "Sequential": "#F57C00",
+        "Parallel": "#388E3C",
+        "Initial AI Check": "#F57C00",
+        "Full AI Review": "#388E3C",
     }
     for i, pname in enumerate(process_names):
         offset = width * (i - (n_processes - 1) / 2)

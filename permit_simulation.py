@@ -275,9 +275,9 @@ class PermitSimulation:
             # Segments 1 & 3 (like-for-like) - N(3, 1) days
             if is_initial:
                 if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
-                    duration_days = self.sample_normal(5, 0.25)
+                    duration_days = self.sample_normal(3, 1)
                 else:  # like-for-like
-                    duration_days = self.sample_normal(2, 0.5)
+                   duration_days = self.sample_normal(2, 0.5)
                 if self.ai_review == "initial_check":
                     duration_days = duration_days * 0.7
                 elif self.ai_review == "full_review":
@@ -687,6 +687,8 @@ class PermitSimulation:
                     stats["average_times_by_segment"][segment.name] = {
                         "mean": statistics.mean(segment_times),
                         "median": statistics.median(segment_times),
+                        "min": min(segment_times),
+                        "max": max(segment_times),
                         "count": len(segment_times),
                     }
         
@@ -725,6 +727,54 @@ class PermitSimulation:
             "service_mean": statistics.mean(usace_service) if usace_service else 0,
             "service_median": statistics.median(usace_service) if usace_service else 0,
         }
-        
+
+        # Total waiting and service time (across all stages)
+        total_waiting_times = []
+        total_service_times = []
+        for p in self.completed_permits:
+            waiting = (
+                p.epa_debris_total_waiting
+                + p.usace_debris_total_waiting
+                + p.planning_total_waiting
+                + p.public_works_total_waiting
+                + p.fire_review_total_waiting
+                + p.public_health_total_waiting
+            )
+            if p.misc_request is not None and p.misc_service_start is not None:
+                waiting += p.misc_service_start - p.misc_request
+            total_waiting_times.append(waiting)
+
+            service = 0.0
+            if p.epa_debris_end is not None and p.epa_debris_service_start is not None:
+                service += p.epa_debris_end - p.epa_debris_service_start
+            if p.usace_debris_end is not None and p.usace_debris_service_start is not None:
+                service += p.usace_debris_end - p.usace_debris_service_start
+            if p.authorization_end is not None and p.authorization_start is not None:
+                service += p.authorization_end - p.authorization_start
+            if p.plan_prep_end is not None and p.plan_prep_start is not None:
+                service += p.plan_prep_end - p.plan_prep_start
+            service += p.planning_initial_service + p.planning_recheck_service
+            service += p.public_works_initial_service + p.public_works_recheck_service
+            service += p.fire_initial_service + p.fire_recheck_service
+            service += p.public_health_initial_service + p.public_health_recheck_service
+            if p.misc_end is not None and p.misc_service_start is not None:
+                service += p.misc_end - p.misc_service_start
+            total_service_times.append(service)
+
+        stats["total_waiting_time"] = {
+            "mean": statistics.mean(total_waiting_times) if total_waiting_times else 0,
+            "median": statistics.median(total_waiting_times) if total_waiting_times else 0,
+            "std": statistics.stdev(total_waiting_times) if len(total_waiting_times) > 1 else 0,
+            "min": min(total_waiting_times) if total_waiting_times else 0,
+            "max": max(total_waiting_times) if total_waiting_times else 0,
+        }
+        stats["total_service_time"] = {
+            "mean": statistics.mean(total_service_times) if total_service_times else 0,
+            "median": statistics.median(total_service_times) if total_service_times else 0,
+            "std": statistics.stdev(total_service_times) if len(total_service_times) > 1 else 0,
+            "min": min(total_service_times) if total_service_times else 0,
+            "max": max(total_service_times) if total_service_times else 0,
+        }
+
         return stats
 

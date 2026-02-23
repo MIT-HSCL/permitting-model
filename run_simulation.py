@@ -125,7 +125,32 @@ def print_statistics(stats: dict):
         print(f"    Count:  {seg_stats['count']:4d}")
         print(f"    Mean:   {seg_stats['mean']:8.2f} days")
         print(f"    Median: {seg_stats['median']:8.2f} days")
+        if "min" in seg_stats and "max" in seg_stats:
+            print(f"    Min:    {seg_stats['min']:8.2f} days")
+            print(f"    Max:    {seg_stats['max']:8.2f} days")
     
+    if "total_waiting_time" in stats:
+        print("\n" + "-"*80)
+        print("TOTAL WAITING TIME (across all stages)")
+        print("-"*80)
+        tw = stats["total_waiting_time"]
+        print(f"  Mean:   {tw['mean']:8.2f} days")
+        print(f"  Median: {tw['median']:8.2f} days")
+        print(f"  Std Dev:{tw['std']:8.2f} days")
+        print(f"  Min:    {tw['min']:8.2f} days")
+        print(f"  Max:    {tw['max']:8.2f} days")
+
+    if "total_service_time" in stats:
+        print("\n" + "-"*80)
+        print("TOTAL SERVICE TIME (across all stages)")
+        print("-"*80)
+        ts = stats["total_service_time"]
+        print(f"  Mean:   {ts['mean']:8.2f} days")
+        print(f"  Median: {ts['median']:8.2f} days")
+        print(f"  Std Dev:{ts['std']:8.2f} days")
+        print(f"  Min:    {ts['min']:8.2f} days")
+        print(f"  Max:    {ts['max']:8.2f} days")
+
     print("\n" + "-"*80)
     print("PUBLIC WORKS RE-CHECK STATISTICS")
     print("-"*80)
