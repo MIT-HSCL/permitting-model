@@ -154,11 +154,25 @@ def print_statistics(stats: dict):
     print("\n" + "-"*80)
     print("PUBLIC WORKS RE-CHECK STATISTICS")
     print("-"*80)
-    if stats['public_works_rechecks']:
+    if stats.get('public_works_rechecks'):
         rc = stats['public_works_rechecks']
         print(f"  Average re-checks per permit: {rc['average']:.2f}")
         print(f"  Maximum re-checks: {rc['max']}")
         print(f"  Permits requiring re-checks: {rc['total_permits_with_rechecks']}")
+
+    if stats.get('applicant_revisions'):
+        print("\n" + "-"*80)
+        print("APPLICANT REVISIONS (when plan returned but not yet approved)")
+        print("-"*80)
+        ar = stats['applicant_revisions']
+        print(f"  Mean total revision time per permit: {ar['total_time_mean']:.2f} days")
+        print(f"  Median total revision time per permit: {ar['total_time_median']:.2f} days")
+        print(f"  Mean revision count per permit: {ar['revision_count_mean']:.2f}")
+        print(f"  Maximum revisions (any permit): {ar['revision_count_max']}")
+        print(f"  Permits with at least one revision: {ar['permits_with_revisions']}")
+        if stats.get('average_total_time') and stats['average_total_time'].get('mean', 0) > 0:
+            pct = 100.0 * ar['total_time_mean'] / stats['average_total_time']['mean']
+            print(f"  → Applicant revision time is {pct:.1f}% of mean total processing time (disaster to construction).")
     
     print("\n" + "="*80)
 

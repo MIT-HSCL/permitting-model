@@ -7,7 +7,7 @@ import simpy
 import random
 import numpy as np
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 import statistics
 
@@ -88,6 +88,10 @@ class Permit:
     public_health_initial_service: float = 0.0
     public_health_recheck_waiting: float = 0.0
     public_health_recheck_service: float = 0.0
+    # Applicant revisions (when plan is returned but not yet approved); N(30, 10) days per occurrence
+    applicant_revisions_total_time: float = 0.0
+    applicant_revision_count: int = 0
+    applicant_revision_intervals: List[tuple] = field(default_factory=list)
     # Agency Referrals permits
     misc_request: Optional[float] = None
     misc_service_start: Optional[float] = None
@@ -153,6 +157,14 @@ class PermitSimulation:
         self.completed_permits: List[Permit] = []
         self.in_progress_permits: Dict[int, Permit] = {}
         self.permit_counter = 0
+        # Applicant revision coordination per permit:
+        # - _revision_events gates review processes while a revision is pending/running
+        # - _active_reviews counts in-progress review services (Planning, Public Works, Fire, Public Health)
+        # - _no_active_events is triggered when active reviews drop to zero so revisions
+        #   can start without overlapping any review service time.
+        self._revision_events: Dict[int, simpy.Event] = {}
+        self._active_reviews: Dict[int, int] = {}
+        self._no_active_events: Dict[int, simpy.Event] = {}
         
     def sample_segment(self) -> Segment:
         """
@@ -255,6 +267,11 @@ class PermitSimulation:
     def planning_department(self, permit: Permit):
         """Planning department processing with approval/recheck logic.
         """
+        # If a revision is in progress for this permit, wait until it completes
+        rev_evt = self._revision_events.get(permit.permit_id)
+        if rev_evt is not None and not rev_evt.triggered:
+            yield rev_evt
+
         is_initial = permit.planning_rechecks == 0
         if is_initial and permit.planning_request is None:
             permit.planning_request = self.env.now
@@ -273,6 +290,9 @@ class PermitSimulation:
                 permit.planning_recheck_waiting += (service_start_time - request_time)
             # Segments 2 & 4 (non-like-for-like) - N(9, 2) days
             # Segments 1 & 3 (like-for-like) - N(3, 1) days
+            # Mark review service as active (for revision overlap control)
+            self._active_reviews[permit.permit_id] = self._active_reviews.get(permit.permit_id, 0) + 1
+
             if is_initial:
                 if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
                     duration_days = self.sample_normal(3, 1)
@@ -290,6 +310,17 @@ class PermitSimulation:
                     duration_days = self.sample_normal(2, 0.5)
             
             yield self.env.timeout(duration_days)
+
+            # Review service finished; update active count and possibly notify
+            # waiting applicant revisions that no reviews are active.
+            pid = permit.permit_id
+            self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
+            if self._active_reviews[pid] <= 0:
+                self._active_reviews[pid] = 0
+                no_evt = self._no_active_events.get(pid)
+                if no_evt is not None and not no_evt.triggered:
+                    no_evt.succeed()
+
             service_end_time = self.env.now
             if is_initial:
                 permit.planning_initial_service += (service_end_time - service_start_time)
@@ -333,6 +364,11 @@ class PermitSimulation:
         Segments 3-6 (non-pre-approved) take longer.
         Sets permit.public_works_approved to True if approved, False if needs re-check.
         """
+        # Pause if an applicant revision is in progress.
+        rev_evt = self._revision_events.get(permit.permit_id)
+        if rev_evt is not None and not rev_evt.triggered:
+            yield rev_evt
+
         is_initial = permit.public_works_rechecks == 0
         if is_initial and permit.public_works_request is None:
             permit.public_works_request = self.env.now
@@ -342,6 +378,9 @@ class PermitSimulation:
         with self.public_works_servers.request(priority=priority) as request:
             yield request
             service_start_time = self.env.now
+            # Mark review service as active for overlap control
+            self._active_reviews[permit.permit_id] = self._active_reviews.get(permit.permit_id, 0) + 1
+
             if is_initial:
                 permit.public_works_service_start = service_start_time  # Track first service start
             permit.public_works_total_waiting += (service_start_time - request_time)  # Track cumulative waiting
@@ -369,6 +408,15 @@ class PermitSimulation:
                 if self.ai_review == "full_review":
                     duration_days_recheck = duration_days_recheck * 0.1
                 yield self.env.timeout(duration_days_recheck)
+
+            # Mark end of active review time and notify revisions if no reviews remain
+            pid = permit.permit_id
+            self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
+            if self._active_reviews[pid] <= 0:
+                self._active_reviews[pid] = 0
+                no_evt = self._no_active_events.get(pid)
+                if no_evt is not None and not no_evt.triggered:
+                    no_evt.succeed()
             service_end_time = self.env.now
             if is_initial:
                 permit.public_works_initial_service += (service_end_time - service_start_time)
@@ -395,30 +443,43 @@ class PermitSimulation:
         public_works_approved = False
         while not public_works_approved:
             public_works_approved = yield self.env.process(self.public_works(permit))
+            if not public_works_approved:
+                yield self.env.process(self.applicant_revision(permit))
 
     def planning_until_approved(self, permit: Permit):
         """Loop planning department until approved."""
         planning_approved = False
         while not planning_approved:
             planning_approved = yield self.env.process(self.planning_department(permit))
+            if not planning_approved:
+                yield self.env.process(self.applicant_revision(permit))
 
     def fire_review_until_approved(self, permit: Permit):
         """Loop fire review until approved."""
         fire_approved = False
         while not fire_approved:
             fire_approved = yield self.env.process(self.fire_review(permit))
+            if not fire_approved:
+                yield self.env.process(self.applicant_revision(permit))
 
     def public_health_review_until_approved(self, permit: Permit):
         """Loop public health review until approved."""
         public_health_approved = False
         while not public_health_approved:
             public_health_approved = yield self.env.process(self.public_health_review(permit))
+            if not public_health_approved:
+                yield self.env.process(self.applicant_revision(permit))
 
     
     def fire_review(self, permit: Permit):
         """Fire department review (all permits) with approval/recheck logic.
         70% take ~1 day, 30% take ~13 days.
         """
+        # Pause if an applicant revision is in progress.
+        rev_evt = self._revision_events.get(permit.permit_id)
+        if rev_evt is not None and not rev_evt.triggered:
+            yield rev_evt
+
         is_initial = permit.fire_rechecks == 0
         if is_initial and permit.fire_review_request is None:
             permit.fire_review_request = self.env.now
@@ -428,6 +489,9 @@ class PermitSimulation:
         with self.fire_servers.request(priority=priority) as request:
             yield request
             service_start_time = self.env.now
+            # Mark review service as active
+            self._active_reviews[permit.permit_id] = self._active_reviews.get(permit.permit_id, 0) + 1
+
             if is_initial:
                 permit.fire_review_service_start = service_start_time
             permit.fire_review_total_waiting += (service_start_time - request_time)
@@ -447,6 +511,15 @@ class PermitSimulation:
                 # Recheck uses shorter time
                 duration_days = self.sample_normal(2, 0.5)
             yield self.env.timeout(duration_days)
+
+            # Mark end of active review time and notify revisions if no reviews remain
+            pid = permit.permit_id
+            self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
+            if self._active_reviews[pid] <= 0:
+                self._active_reviews[pid] = 0
+                no_evt = self._no_active_events.get(pid)
+                if no_evt is not None and not no_evt.triggered:
+                    no_evt.succeed()
             service_end_time = self.env.now
             if is_initial:
                 permit.fire_initial_service += (service_end_time - service_start_time)
@@ -470,6 +543,11 @@ class PermitSimulation:
     
     def public_health_review(self, permit: Permit):
         """Public Health department review (1.3% of permits) with approval/recheck logic."""
+        # Pause if an applicant revision is in progress.
+        rev_evt = self._revision_events.get(permit.permit_id)
+        if rev_evt is not None and not rev_evt.triggered:
+            yield rev_evt
+
         is_initial = permit.public_health_rechecks == 0
         if is_initial and permit.public_health_request is None:
             permit.public_health_request = self.env.now
@@ -486,6 +564,9 @@ class PermitSimulation:
                 permit.public_health_initial_waiting += (service_start_time - request_time)
             else:
                 permit.public_health_recheck_waiting += (service_start_time - request_time)
+            # Mark review service as active
+            self._active_reviews[permit.permit_id] = self._active_reviews.get(permit.permit_id, 0) + 1
+
             # N(10, 2) days - low confidence (for initial)
             if is_initial:
                 duration_days = self.sample_normal(10, 2)
@@ -493,6 +574,15 @@ class PermitSimulation:
                 # Recheck uses shorter time
                 duration_days = self.sample_normal(5, 1)
             yield self.env.timeout(duration_days)
+
+            # Mark end of active review time and notify revisions if no reviews remain
+            pid = permit.permit_id
+            self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
+            if self._active_reviews[pid] <= 0:
+                self._active_reviews[pid] = 0
+                no_evt = self._no_active_events.get(pid)
+                if no_evt is not None and not no_evt.triggered:
+                    no_evt.succeed()
             service_end_time = self.env.now
             if is_initial:
                 permit.public_health_initial_service += (service_end_time - service_start_time)
@@ -513,6 +603,43 @@ class PermitSimulation:
             permit.public_health_rechecks += 1
 
         return approved
+
+    def applicant_revision(self, permit: Permit):
+        """Applicant revisions when a plan is returned but not yet approved. Time N(30, 10) days."""
+        pid = permit.permit_id
+        # If a revision is already in progress for this permit, just wait for it.
+        existing_event = self._revision_events.get(pid)
+        if existing_event is not None and not existing_event.triggered:
+            yield existing_event
+            return
+
+        # Start a new shared revision interval for this permit and block any
+        # new review work until it completes.
+        evt = self.env.event()
+        self._revision_events[pid] = evt
+
+        # Ensure we don't overlap applicant revisions with any in-progress
+        # review service time. If there are active reviews, wait until they
+        # all finish before starting the revision clock.
+        active = self._active_reviews.get(pid, 0)
+        if active > 0:
+            no_evt = self._no_active_events.get(pid)
+            if no_evt is None or no_evt.triggered:
+                no_evt = self.env.event()
+                self._no_active_events[pid] = no_evt
+            yield no_evt
+
+        start_time = self.env.now
+        duration_days = self.sample_normal(30, 10)
+        permit.applicant_revision_count += 1
+        yield self.env.timeout(duration_days)
+        end_time = self.env.now
+        actual_duration = end_time - start_time
+        permit.applicant_revisions_total_time += actual_duration
+        permit.applicant_revision_intervals.append((start_time, end_time))
+
+        # Resume any review processes waiting on this revision.
+        evt.succeed()
     
     def permit_process(self, permit: Permit):
         """Main process flow for a single permit."""
@@ -700,6 +827,17 @@ class PermitSimulation:
             "total_permits_with_rechecks": sum(1 for c in recheck_counts if c > 0),
         }
 
+        # Applicant revisions (when plan returned but not yet approved); N(30, 10) days per occurrence
+        applicant_revision_times = [p.applicant_revisions_total_time for p in self.completed_permits]
+        applicant_revision_counts = [p.applicant_revision_count for p in self.completed_permits]
+        stats["applicant_revisions"] = {
+            "total_time_mean": statistics.mean(applicant_revision_times) if applicant_revision_times else 0,
+            "total_time_median": statistics.median(applicant_revision_times) if applicant_revision_times else 0,
+            "revision_count_mean": statistics.mean(applicant_revision_counts) if applicant_revision_counts else 0,
+            "revision_count_max": max(applicant_revision_counts) if applicant_revision_counts else 0,
+            "permits_with_revisions": sum(1 for c in applicant_revision_counts if c > 0),
+        }
+
         # Debris removal (EPA vs USACE): waiting + service time
         epa_waiting = [p.epa_debris_total_waiting for p in self.completed_permits]
         usace_waiting = [p.usace_debris_total_waiting for p in self.completed_permits]
@@ -757,6 +895,7 @@ class PermitSimulation:
             service += p.public_works_initial_service + p.public_works_recheck_service
             service += p.fire_initial_service + p.fire_recheck_service
             service += p.public_health_initial_service + p.public_health_recheck_service
+            service += p.applicant_revisions_total_time
             if p.misc_end is not None and p.misc_service_start is not None:
                 service += p.misc_end - p.misc_service_start
             total_service_times.append(service)

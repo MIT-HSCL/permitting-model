@@ -42,6 +42,10 @@ def calculate_stage_times(permit: Permit) -> dict:
     # Plan preparation (no waiting, just service time)
     if permit.plan_prep_start is not None and permit.plan_prep_end is not None:
         stages['Plan Preparation'] = permit.plan_prep_end - permit.plan_prep_start
+
+    # Applicant revisions (aggregated service time done by applicant)
+    if getattr(permit, "applicant_revisions_total_time", 0.0) > 0:
+        stages["Applicant Revisions"] = permit.applicant_revisions_total_time
     
     # Planning department - four buckets (initial waiting/service, recheck waiting/service)
     if (
@@ -153,6 +157,13 @@ def calculate_step_waiting_service_totals(permit: Permit) -> dict:
         if prep_service > 0:
             steps["Plan Preparation"] = {"waiting": 0.0, "service": prep_service}
 
+    # Applicant revisions (service only, no agency waiting)
+    if getattr(permit, "applicant_revisions_total_time", 0.0) > 0:
+        steps["Applicant Revisions"] = {
+            "waiting": 0.0,
+            "service": permit.applicant_revisions_total_time,
+        }
+
     # Planning department (aggregate initial + recheck)
     planning_waiting = permit.planning_initial_waiting + permit.planning_recheck_waiting
     planning_service = permit.planning_initial_service + permit.planning_recheck_service
@@ -218,6 +229,7 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
         'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
+        'Applicant Revisions',
         'Planning Initial (Waiting)',
         'Planning Initial (Service)',
         'Planning Recheck (Waiting)',
@@ -268,6 +280,7 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
         # Stages without waiting (service only)
         'Authorization': '#4ECDC4',
         'Plan Preparation': '#45B7D1',
+        'Applicant Revisions': '#FFCC80',
     }
     
     # Prepare data
@@ -299,6 +312,7 @@ def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize
         'Fire Review Initial (Service)',
         'Authorization',
         'Plan Preparation',
+        'Applicant Revisions',
     ]
     
     for stage in stage_order:
@@ -342,6 +356,33 @@ def _gantt_intervals_from_permit(permit: Permit):
         ('Fire Review', 'fire_review_request', 'fire_review_service_start', 'fire_review_end', '#F3DDA1', '#D9A71C'),
         ('Public Health', 'public_health_request', 'public_health_service_start', 'public_health_end', '#F3DDA1', '#D9A71C'),
     ]
+
+    # Intervals where the applicant is revising (no reviews should be active).
+    revision_intervals = sorted(
+        getattr(permit, "applicant_revision_intervals", []),
+        key=lambda x: x[0],
+    )
+
+    def carve_out_revisions(start, end, is_review_service):
+        """Return sub-intervals of [start, end] that do NOT overlap applicant revisions."""
+        if not is_review_service or not revision_intervals:
+            return [(start, end)]
+        result = []
+        cur = start
+        for rs, re in revision_intervals:
+            if re <= cur or rs >= end:
+                continue
+            if rs > cur:
+                result.append((cur, min(rs, end)))
+            cur = max(cur, re)
+            if cur >= end:
+                break
+        if cur < end:
+            result.append((cur, end))
+        return result
+
+    review_stages = {"Planning", "Agency Referrals", "Public Works", "Fire Review", "Public Health"}
+
     for stage_name, request_attr, service_start_attr, end_attr, waiting_color, service_color in stages_info:
         request_time = getattr(permit, request_attr, None) if request_attr else None
         service_start_time = getattr(permit, service_start_attr, None) if service_start_attr else None
@@ -353,10 +394,21 @@ def _gantt_intervals_from_permit(permit: Permit):
             if wait_dur > 0.001 and waiting_color:
                 intervals.append((request_time, service_start_time, f'{stage_name} (waiting)', waiting_color, True))
             if end_time - service_start_time > 0 and service_color:
-                intervals.append((service_start_time, end_time, f'{stage_name} (service)', service_color, False))
+                is_review_service = stage_name in review_stages
+                for seg_start, seg_end in carve_out_revisions(service_start_time, end_time, is_review_service):
+                    if seg_end - seg_start > 0:
+                        intervals.append((seg_start, seg_end, f'{stage_name} (service)', service_color, False))
         else:
             if end_time - request_time > 0 and service_color:
                 intervals.append((request_time, end_time, stage_name, service_color, False))
+
+    # Applicant revisions: service-only intervals recorded on the permit
+    for start, end in getattr(permit, "applicant_revision_intervals", []):
+        if start is None or end is None:
+            continue
+        if end - start > 0:
+            # Use same blue as Authorization/Plan Preparation so they appear together visually
+            intervals.append((start, end, "Applicant Revisions", "#659DB2", False))
     return intervals
 
 
@@ -430,7 +482,7 @@ def plot_gantt_single_permit(
     # 6) Public Health
     row_definitions = [
         ("Remove debris", ["EPA Debris", "USACE Debris"]),
-        ("Secure financing & prepare plans", ["Authorization", "Plan Preparation"]),
+        ("Secure financing & prepare plans", ["Authorization", "Plan Preparation", "Applicant Revisions"]),
         ("Permit reviews", ["Planning", "Agency Referrals", "Public Works"]),
         ("Fire Review", ["Fire Review"])
     ]
@@ -562,7 +614,7 @@ def plot_gantt_three_random_permits(
 
     row_definitions = [
         ("Debris removal", ["EPA Debris", "USACE Debris"]),
-        ("Authorization & Plan preparation", ["Authorization", "Plan Preparation"]),
+        ("Authorization & Plan preparation", ["Authorization", "Plan Preparation", "Applicant Revisions"]),
         ("Permit reviews", ["Planning", "Agency Referrals", "Public Works"]),
         ("Fire Review", ["Fire Review"]),
     ]
@@ -589,6 +641,7 @@ def plot_gantt_three_random_permits(
         "Planning": "Permit reviews",
         "Agency Referrals": "Permit reviews",
         "Public Works": "Permit reviews",
+        "Applicant Revisions": "Authorization & Plan preparation",
     }
 
     legend_order = [
@@ -730,6 +783,7 @@ def plot_average_time_by_stage(permits: List[Permit], figsize=(10, 6)):
         # Stages without waiting (service only)
         'Authorization': '#4ECDC4',
         'Plan Preparation': '#45B7D1',
+        'Applicant Revisions': '#FFCC80',
     }
     
     # Calculate averages - dynamically determine stages from data
@@ -753,6 +807,7 @@ def plot_average_time_by_stage(permits: List[Permit], figsize=(10, 6)):
         'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
+        'Applicant Revisions',
     ]
     stage_averages = {k: v for k, v in stage_averages.items() if v > 0 or k in key_stages}
     
@@ -838,6 +893,9 @@ def plot_time_by_segment(permits: List[Permit], figsize=(12, 6)):
         'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
+        'Applicant Revisions',
+        'Applicant Revisions',
+        'Applicant Revisions',
         'Planning Initial (Waiting)',
         'Planning Initial (Service)',
         'Planning Recheck (Waiting)',
@@ -867,6 +925,7 @@ def plot_time_by_segment(permits: List[Permit], figsize=(12, 6)):
         'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
+        'Applicant Revisions',
     ]
     stage_order = [s for s in preferred_order if s in all_stages or s in key_stages]
     # Add any remaining stages not in preferred order
@@ -1000,6 +1059,8 @@ def plot_time_by_segment_like_for_like(permits: List[Permit], figsize=(12, 6)):
         'USACE Debris (Service)',
         'Authorization',
         'Plan Preparation',
+        'Applicant Revisions',
+        'Applicant Revisions',
     ]
     stage_order = [s for s in preferred_order if s in all_stages or s in key_stages]
     # Add any remaining stages not in preferred order
