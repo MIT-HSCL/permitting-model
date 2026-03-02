@@ -85,6 +85,89 @@ def run_simulation(
     return sim
 
 
+def run_multiple_simulations(
+    n_runs: int,
+    num_permits: int = 100,
+    simulation_duration: float | None = None,
+    base_seed: int = 42,
+    inter_arrival_time: float = 1.0,
+    scenario_params_list: list[dict] | None = None,
+    collect_permits: bool = False,
+):
+    """
+    Run the simulation many times, optionally for multiple scenarios.
+
+    Args:
+        n_runs: Number of repetitions per scenario.
+        num_permits: Number of permits per run (if simulation_duration is None).
+        simulation_duration: Max simulation time in days (optional).
+        base_seed: Base random seed; each run uses base_seed + run_index.
+        inter_arrival_time: Average time between permit arrivals (days).
+        scenario_params_list: List of dicts, each describing a scenario.
+            Each dict can contain:
+              - "name": scenario name (string, for labeling)
+              - any extra keyword args for run_simulation
+                (e.g. "sequential", "ai_review", pct_* parameters).
+        collect_permits: If True, also return completed permits for each run.
+
+    Example scenario list:
+        [
+            {"name": "standard_default", "sequential": "standard"},
+            {"name": "parallel_default", "sequential": "parallel"},
+            {
+                "name": "balanced_segments",
+                "sequential": "standard",
+                "pct_pre_approved": 0.5,
+                "pct_custom": 0.25,
+                "pct_self_cert": 0.25,
+                "pct_like_for_like": 0.8,
+            },
+        ]
+
+    Returns:
+        List of result dicts, each with:
+            {
+              "run_index": int,
+              "seed": int,
+              "scenario": str,
+              "params": dict,    # params passed into run_simulation
+              "stats": dict,     # sim.get_statistics() output
+              "permits": list,   # ONLY present if collect_permits=True;
+                                 # list of completed Permit objects for this run
+            }
+    """
+    if scenario_params_list is None:
+        scenario_params_list = [{"name": "default"}]
+
+    results: list[dict] = []
+    for run_index in range(n_runs):
+        seed = base_seed + run_index
+        for scenario in scenario_params_list:
+            scenario_name = scenario.get("name", f"scenario_{len(results)}")
+            params = {k: v for k, v in scenario.items() if k != "name"}
+
+            sim = run_simulation(
+                num_permits=num_permits,
+                simulation_duration=simulation_duration,
+                random_seed=seed,
+                inter_arrival_time=inter_arrival_time,
+                **params,
+            )
+            stats = sim.get_statistics()
+            entry: dict = {
+                "run_index": run_index,
+                "seed": seed,
+                "scenario": scenario_name,
+                "params": params,
+                "stats": stats,
+            }
+            if collect_permits:
+                entry["permits"] = list(sim.completed_permits)
+            results.append(entry)
+
+    return results
+
+
 def print_statistics(stats: dict):
     """Print simulation statistics in a readable format."""
     print("\n" + "="*80)

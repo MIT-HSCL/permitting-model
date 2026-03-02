@@ -328,12 +328,12 @@ class PermitSimulation:
                 permit.planning_recheck_service += (service_end_time - service_start_time)
         
         if permit.planning_rechecks == 0:
-            # 25% approved, 75% need re-check
-            approved = random.random() < 0.25
+            # 10% approved, 90% need re-check
+            approved = random.random() < 0.1
             is_initial = False
         else:
-            # 95% approved, 5% need re-check if has already been rechecked
-            approved = random.random() < 0.95
+            # 90% approved, 10% need re-check if has already been rechecked
+            approved = random.random() < 0.9
 
         if approved:
             permit.planning_end = self.env.now
@@ -424,12 +424,12 @@ class PermitSimulation:
                 permit.public_works_recheck_service += (service_end_time - service_start_time)
 
         if permit.public_works_rechecks == 0:
-            # 25% approved, 75% need re-check
-            approved = random.random() < 0.25
+            # 10% approved, 90% need re-check
+            approved = random.random() < 0.1
             is_initial = False
         else:
-            # 95% approved, 5% need re-check if has already been rechecked
-            approved = random.random() < 0.95
+            # 90% approved, 10% need re-check if has already been rechecked
+            approved = random.random() < 0.9
 
         if approved:
             permit.public_works_end = self.env.now
