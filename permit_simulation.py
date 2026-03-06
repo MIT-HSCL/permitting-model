@@ -147,11 +147,10 @@ class PermitSimulation:
         # Resource pools
         self.epa_debris_servers = simpy.Resource(env, capacity=160)
         self.usace_debris_servers = simpy.Resource(env, capacity=116)
-        self.planning_servers = simpy.PriorityResource(env, capacity=100)  # 20 servers × 5 permits each
-        self.public_works_servers = simpy.PriorityResource(env, capacity=200) # 40 servers x 5 permits each
+        self.planning_servers = simpy.PriorityResource(env, capacity=150)  # 20 servers × 7.5 permits each
+        self.public_works_servers = simpy.PriorityResource(env, capacity=300) # 40 servers x 7.5 permits each
         self.fire_servers = simpy.PriorityResource(env, capacity=100)
         self.public_health_servers = simpy.PriorityResource(env, capacity=25)
-        self.misc_servers = simpy.Resource(env, capacity=1000)
         
         # Statistics
         self.completed_permits: List[Permit] = []
@@ -295,7 +294,7 @@ class PermitSimulation:
 
             if is_initial:
                 if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
-                    duration_days = self.sample_normal(3, 1)
+                    duration_days = self.sample_normal(5, 1)
                 else:  # like-for-like
                    duration_days = self.sample_normal(2, 0.5)
                 if self.ai_review == "initial_check":
@@ -304,10 +303,9 @@ class PermitSimulation:
                     duration_days = duration_days * 0.1
             else:
                 # Recheck uses shorter time
+                duration_days = self.sample_normal(1, 0.5)
                 if self.ai_review == "full_review":
-                    duration_days = self.sample_normal(1, 0.2)
-                else:
-                    duration_days = self.sample_normal(2, 0.5)
+                    duration_days = duration_days * 0.1
             
             yield self.env.timeout(duration_days)
 
@@ -351,12 +349,8 @@ class PermitSimulation:
             return
         
         permit.misc_request = self.env.now
-        with self.misc_servers.request() as request:
-            yield request
-            permit.misc_service_start = self.env.now
-            # lognormal 30, sigma 0.7 days days
-            duration_days = self.sample_lognormal(30, 0.7)
-            yield self.env.timeout(duration_days)
+        duration_days = self.sample_lognormal(30, 0.7)
+        yield self.env.timeout(duration_days)
         permit.misc_end = self.env.now
     
     def public_works(self, permit: Permit):

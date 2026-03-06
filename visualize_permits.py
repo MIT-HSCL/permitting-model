@@ -936,7 +936,9 @@ def plot_average_waiting_and_service_by_step(
             steps.append(step)
 
     waiting_means = [np.mean(step_waiting[s]) for s in steps]
+    waiting_stds = [np.std(step_waiting[s]) for s in steps]
     service_means = [np.mean(step_service.get(s, [0.0])) for s in steps]
+    service_stds = [np.std(step_service.get(s, [0.0])) for s in steps]
 
     x = np.arange(len(steps))
     width = 0.35
@@ -960,7 +962,7 @@ def plot_average_waiting_and_service_by_step(
         edgecolor="black",
     )
 
-    # Add value labels
+    # Add value labels (means) above each bar
     for bar in list(bars_wait) + list(bars_service):
         height = bar.get_height()
         ax.text(
@@ -971,6 +973,127 @@ def plot_average_waiting_and_service_by_step(
             va="bottom",
             fontsize=9,
         )
+
+    # Print summary statistics (mean and standard deviation) in text after the graph
+    print("Average waiting and service time by step (days):")
+    for step, w_mean, w_std, s_mean, s_std in zip(
+        steps, waiting_means, waiting_stds, service_means, service_stds
+    ):
+        print(
+            f"  {step}: "
+            f"waiting mean={w_mean:.2f}, σ={w_std:.2f}; "
+            f"service mean={s_mean:.2f}, σ={s_std:.2f}"
+        )
+
+
+def plot_permits_by_stage_over_time(
+    permits: List[Permit],
+    stages: Optional[List[str]] = None,
+    include_waiting: bool = True,
+    include_service: bool = True,
+    num_points: int = 200,
+    figsize=(12, 6),
+):
+    """
+    Plot the total number of permits active in each stage over time.
+
+    This uses the same stage definitions as the Gantt chart helper
+    (_gantt_intervals_from_permit), and counts a permit as \"in a stage\"
+    whenever it is either waiting or in service for that stage (configurable).
+
+    Args:
+        permits: List of Permit objects.
+        stages: Optional list of stage labels to include. If None, uses all
+                stages seen in the intervals (e.g. 'Planning', 'Public Works').
+                Note: waiting/service variants like 'Planning (waiting)' and
+                'Planning (service)' are collapsed to 'Planning'.
+        include_waiting: If True, count waiting intervals for each stage.
+        include_service: If True, count service intervals for each stage.
+        num_points: Number of time samples between earliest start and latest
+                    end to estimate counts.
+        figsize: Matplotlib figure size.
+    """
+    if not permits:
+        print("No permits provided for stage-over-time chart.")
+        return None, None
+
+    # Collect FIRST time each permit reaches each stage (for cumulative curves)
+    stage_first_times: dict[str, list[float]] = {}
+    t_min = None
+    t_max = None
+
+    for permit in permits:
+        per_permit_first: dict[str, float] = {}
+        for start, end, label, _color, is_waiting in _gantt_intervals_from_permit(permit):
+            # Collapse 'Planning (waiting)' / 'Planning (service)' -> 'Planning'
+            base_label = label.split(" (")[0]
+            if is_waiting and not include_waiting:
+                continue
+            if (not is_waiting) and not include_service:
+                continue
+            if start is None or end is None or end <= start:
+                continue
+
+            prev = per_permit_first.get(base_label)
+            if prev is None or start < prev:
+                per_permit_first[base_label] = start
+
+        for stage_name, first_time in per_permit_first.items():
+            stage_first_times.setdefault(stage_name, []).append(first_time)
+            t_min = first_time if t_min is None else min(t_min, first_time)
+            t_max = first_time if t_max is None else max(t_max, first_time)
+
+    if t_min is None:
+        print("No stage timing data found for stage-over-time chart.")
+        return None, None
+
+    # Choose which stages to plot
+    all_stage_names = sorted(stage_first_times.keys())
+    if stages is None:
+        stages_to_plot = all_stage_names
+    else:
+        stages_to_plot = [s for s in stages if s in stage_first_times]
+        if not stages_to_plot:
+            print("None of the requested stages were found in the data.")
+            return None, None
+
+    # Sample times and count permits that have REACHED each stage (cumulative)
+    times = np.linspace(t_min, t_max, num_points)
+    counts = {stage: np.zeros_like(times, dtype=float) for stage in stages_to_plot}
+
+    for stage in stages_to_plot:
+        first_times = np.sort(np.array(stage_first_times.get(stage, []), dtype=float))
+        if first_times.size == 0:
+            continue
+        arr = counts[stage]
+        idx = 0
+        running = 0.0
+        for i, t in enumerate(times):
+            while idx < first_times.size and first_times[idx] <= t:
+                running += 1.0
+                idx += 1
+            arr[i] = running
+
+    # Convert to share of permits (0–100%) for cumulative recovery-style curves
+    total_permits = max(len(permits), 1)
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Convert simulation time (days) to rough months for readability
+    time_months = times / 30.0
+
+    for stage in stages_to_plot:
+        share_pct = counts[stage] / total_permits * 100.0
+        ax.plot(time_months, share_pct, linewidth=2, label=stage)
+
+    ax.set_xlabel("Months postdisaster (simulation time)", fontsize=12)
+    ax.set_ylabel("Share of permits in stage (%)", fontsize=12)
+    ax.set_title("Share of permits by stage over time", fontsize=14, fontweight="bold")
+    ax.set_ylim(0, 100)
+    ax.legend(loc="lower right")
+    ax.grid(axis="both", alpha=0.3)
+
+    plt.tight_layout()
+    return fig, ax
 
     ax.set_xlabel("Process Step", fontsize=12)
     ax.set_ylabel("Average Time (days)", fontsize=12)
