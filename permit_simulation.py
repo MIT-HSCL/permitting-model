@@ -245,7 +245,7 @@ class PermitSimulation:
         """Securing authorization & funding to rebuild."""
         permit.authorization_start = self.env.now
         # N(42, 20) days
-        duration_days = self.sample_normal(42, 20)
+        duration_days = self.sample_normal(0, 0)
         yield self.env.timeout(duration_days)
         permit.authorization_end = self.env.now
     
@@ -256,9 +256,9 @@ class PermitSimulation:
         # Segments 1 & 2 (pre-approved plan) → N(10, 2) days
         # Segments 3-6 (custom-builds) → lognormal dist with median 150 and sigma = 0.6 days
         if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
-            duration_days = self.sample_normal(30, 20)
+            duration_days = self.sample_lognormal(249, 0.53)
         else:  # Segments 3-6
-            duration_days = self.sample_lognormal(150, 0.6)
+            duration_days = lognorm.rvs(0.5246014736524087, 0, 432.70852353179737)
         
         yield self.env.timeout(duration_days)
         permit.plan_prep_end = self.env.now
