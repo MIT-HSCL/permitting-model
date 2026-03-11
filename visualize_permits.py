@@ -6,7 +6,7 @@ Creates various charts showing time spent in each stage of the process.
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
-from typing import List
+from typing import List, Optional
 from permit_simulation import Permit
 
 
@@ -17,12 +17,23 @@ def calculate_stage_times(permit: Permit) -> dict:
     """
     stages = {}
     
-    # Debris removal (EPA + USACE) - separate waiting and service
-    if (permit.debris_removal_request is not None and 
-        permit.debris_removal_service_start is not None and 
-        permit.debris_removal_end is not None):
-        stages['Debris Removal (Waiting)'] = permit.debris_removal_service_start - permit.debris_removal_request
-        stages['Debris Removal (Service)'] = permit.debris_removal_end - permit.debris_removal_service_start
+    # Debris removal - EPA (separate waiting and service)
+    if (
+        permit.epa_debris_request is not None
+        and permit.epa_debris_service_start is not None
+        and permit.epa_debris_end is not None
+    ):
+        stages["EPA Debris (Waiting)"] = permit.epa_debris_service_start - permit.epa_debris_request
+        stages["EPA Debris (Service)"] = permit.epa_debris_end - permit.epa_debris_service_start
+
+    # Debris removal - USACE (separate waiting and service)
+    if (
+        permit.usace_debris_request is not None
+        and permit.usace_debris_service_start is not None
+        and permit.usace_debris_end is not None
+    ):
+        stages["USACE Debris (Waiting)"] = permit.usace_debris_service_start - permit.usace_debris_request
+        stages["USACE Debris (Service)"] = permit.usace_debris_end - permit.usace_debris_service_start
     
     # Authorization (no waiting, just service time)
     if permit.authorization_start is not None and permit.authorization_end is not None:
@@ -31,41 +42,73 @@ def calculate_stage_times(permit: Permit) -> dict:
     # Plan preparation (no waiting, just service time)
     if permit.plan_prep_start is not None and permit.plan_prep_end is not None:
         stages['Plan Preparation'] = permit.plan_prep_end - permit.plan_prep_start
+
+    # Applicant revisions (aggregated service time done by applicant)
+    if getattr(permit, "applicant_revisions_total_time", 0.0) > 0:
+        stages["Applicant Revisions"] = permit.applicant_revisions_total_time
     
-    # Planning department - separate waiting and service
-    if (permit.planning_request is not None and 
-        permit.planning_service_start is not None and 
-        permit.planning_end is not None):
-        stages['Planning (Waiting)'] = permit.planning_service_start - permit.planning_request
-        stages['Planning (Service)'] = permit.planning_end - permit.planning_service_start
+    # Planning department - four buckets (initial waiting/service, recheck waiting/service)
+    if (
+        permit.planning_initial_waiting > 0
+        or permit.planning_initial_service > 0
+        or permit.planning_recheck_waiting > 0
+        or permit.planning_recheck_service > 0
+    ):
+        stages["Planning Initial (Waiting)"] = permit.planning_initial_waiting
+        stages["Planning Initial (Service)"] = permit.planning_initial_service
+        stages["Planning Recheck (Waiting)"] = permit.planning_recheck_waiting
+        stages["Planning Recheck (Service)"] = permit.planning_recheck_service
+        stages["Planning Total Waiting"] = permit.planning_initial_waiting + permit.planning_recheck_waiting
+        stages["Planning Total Service"] = permit.planning_initial_service + permit.planning_recheck_service
     
     # Public Works - separate waiting and service
-    if (permit.public_works_request is not None and 
-        permit.public_works_service_start is not None and 
-        permit.public_works_end is not None):
-        stages['Public Works (Waiting)'] = permit.public_works_service_start - permit.public_works_request
-        stages['Public Works (Service)'] = permit.public_works_end - permit.public_works_service_start
+    if (
+        permit.public_works_initial_waiting > 0
+        or permit.public_works_initial_service > 0
+        or permit.public_works_recheck_waiting > 0
+        or permit.public_works_recheck_service > 0
+    ):
+        stages["Public Works Initial (Waiting)"] = permit.public_works_initial_waiting
+        stages["Public Works Initial (Service)"] = permit.public_works_initial_service
+        stages["Public Works Recheck (Waiting)"] = permit.public_works_recheck_waiting
+        stages["Public Works Recheck (Service)"] = permit.public_works_recheck_service
+        stages["Public Works Total Waiting"] = permit.public_works_initial_waiting + permit.public_works_recheck_waiting
+        stages["Public Works Total Service"] = permit.public_works_initial_service + permit.public_works_recheck_service
     
-    # Fire review - separate waiting and service
-    if (permit.fire_review_request is not None and 
-        permit.fire_review_service_start is not None and 
-        permit.fire_review_end is not None):
-        stages['Fire Review (Waiting)'] = permit.fire_review_service_start - permit.fire_review_request
-        stages['Fire Review (Service)'] = permit.fire_review_end - permit.fire_review_service_start
+    # Fire review - four buckets (initial waiting/service, recheck waiting/service)
+    if (
+        permit.fire_initial_waiting > 0
+        or permit.fire_initial_service > 0
+        or permit.fire_recheck_waiting > 0
+        or permit.fire_recheck_service > 0
+    ):
+        stages["Fire Review Initial (Waiting)"] = permit.fire_initial_waiting
+        stages["Fire Review Initial (Service)"] = permit.fire_initial_service
+        stages["Fire Review Recheck (Waiting)"] = permit.fire_recheck_waiting
+        stages["Fire Review Recheck (Service)"] = permit.fire_recheck_service
+        stages["Fire Review Total Waiting"] = permit.fire_initial_waiting + permit.fire_recheck_waiting
+        stages["Fire Review Total Service"] = permit.fire_initial_service + permit.fire_recheck_service
     
-    # Public Health review - separate waiting and service
-    if (permit.public_health_request is not None and 
-        permit.public_health_service_start is not None and 
-        permit.public_health_end is not None):
-        stages['Public Health (Waiting)'] = permit.public_health_service_start - permit.public_health_request
-        stages['Public Health (Service)'] = permit.public_health_end - permit.public_health_service_start
+    # Public Health review - four buckets (initial waiting/service, recheck waiting/service)
+    if (
+        permit.public_health_initial_waiting > 0
+        or permit.public_health_initial_service > 0
+        or permit.public_health_recheck_waiting > 0
+        or permit.public_health_recheck_service > 0
+    ):
+        stages["Public Health Initial (Waiting)"] = permit.public_health_initial_waiting
+        stages["Public Health Initial (Service)"] = permit.public_health_initial_service
+        stages["Public Health Recheck (Waiting)"] = permit.public_health_recheck_waiting
+        stages["Public Health Recheck (Service)"] = permit.public_health_recheck_service
+        stages["Public Health Total Waiting"] = permit.public_health_initial_waiting + permit.public_health_recheck_waiting
+        stages["Public Health Total Service"] = permit.public_health_initial_service + permit.public_health_recheck_service
     
-    # Miscellaneous permits - separate waiting and service
+    # Agency Referrals permits - separate waiting and service
     if (permit.misc_request is not None and 
         permit.misc_service_start is not None and 
         permit.misc_end is not None):
-        stages['Miscellaneous (Waiting)'] = permit.misc_service_start - permit.misc_request
-        stages['Miscellaneous (Service)'] = permit.misc_end - permit.misc_service_start
+        stages['Agency Referrals (Waiting)'] = permit.misc_service_start - permit.misc_request
+        stages['Agency Referrals (Service)'] = permit.misc_end - permit.misc_service_start
     
     # Waiting time (gaps between stages)
     total_processing_time = permit.ready_for_construction - permit.created_at if permit.ready_for_construction else None
@@ -78,627 +121,504 @@ def calculate_stage_times(permit: Permit) -> dict:
     return stages
 
 
-def plot_stacked_bar_chart(permits: List[Permit], max_permits: int = 50, figsize=(14, 8)):
+def calculate_step_waiting_service_totals(permit: Permit) -> dict:
     """
-    Create a stacked bar chart showing time spent in each stage for each permit.
-    
-    Args:
-        permits: List of Permit objects
-        max_permits: Maximum number of permits to display (for readability)
-        figsize: Figure size tuple
+    Calculate total waiting and service times for each major process step,
+    aggregating across initial/recheck where applicable.
+    Returns a dict: {step_name: {"waiting": float, "service": float}}.
     """
-    # Limit number of permits for readability
-    display_permits = permits[:max_permits]
-    
-    # Define stage order and colors (waiting times are lighter, service times are darker)
-    stage_order = [
-        'Debris Removal (Waiting)',
-        'Debris Removal (Service)',
-        'Authorization',
-        'Plan Preparation',
-        'Planning (Waiting)',
-        'Planning (Service)',
-        'Miscellaneous (Waiting)',
-        'Miscellaneous (Service)',
-        'Public Works (Waiting)',
-        'Public Works (Service)',
-        'Fire Review (Waiting)',
-        'Fire Review (Service)',
-        'Public Health (Waiting)',
-        'Public Health (Service)',
-        'Other Waiting',
-    ]
-    
-    colors = {
-        # Waiting times (lighter colors)
-        'Debris Removal (Waiting)': '#FFB3B3',
-        'Planning (Waiting)': '#FFD4B3',
-        'Miscellaneous (Waiting)': '#D4A5A5',
-        'Public Works (Waiting)': '#C8E8D8',
-        'Fire Review (Waiting)': '#FBF3B3',
-        'Public Health (Waiting)': '#E0C8E8',
-        'Other Waiting': '#E0E0E0',
-        # Service times (darker colors)
-        'Debris Removal (Service)': '#FF6B6B',
-        'Planning (Service)': '#FFA07A',
-        'Miscellaneous (Service)': '#C08080',
-        'Public Works (Service)': '#98D8C8',
-        'Fire Review (Service)': '#F7DC6F',
-        'Public Health (Service)': '#BB8FCE',
-        # Stages without waiting (service only)
-        'Authorization': '#4ECDC4',
-        'Plan Preparation': '#45B7D1',
-    }
-    
-    # Prepare data
-    permit_ids = [f"Permit {p.permit_id}" for p in display_permits]
-    stage_data = {stage: [] for stage in stage_order}
-    
-    for permit in display_permits:
-        stages = calculate_stage_times(permit)
-        for stage in stage_order:
-            stage_data[stage].append(stages.get(stage, 0))
-    
-    # Create stacked bar chart
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    bottom = np.zeros(len(display_permits))
-    bars = []
-    
-    # Always include key stages even if they have zeros (for visibility)
-    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
-    
-    for stage in stage_order:
-        values = stage_data[stage]
-        # Plot if there are non-zero values OR if it's a key stage (to ensure visibility)
-        if any(v > 0 for v in values) or stage in key_stages:
-            bar = ax.bar(permit_ids, values, bottom=bottom, 
-                        label=stage, color=colors[stage], alpha=0.8)
-            bottom += values
-            bars.append(bar)
-    
-    ax.set_xlabel('Permit ID', fontsize=12)
-    ax.set_ylabel('Time (days)', fontsize=12)
-    ax.set_title(f'Time Spent in Each Stage by Permit (showing {len(display_permits)} permits)', 
-                 fontsize=14, fontweight='bold')
-    ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
-    ax.grid(axis='y', alpha=0.3)
-    
-    # Rotate x-axis labels for readability
-    plt.xticks(rotation=45, ha='right')
-    plt.tight_layout()
-    
-    return fig, ax
+    steps = {}
+
+    # EPA Debris
+    epa_waiting = permit.epa_debris_total_waiting
+    epa_service = 0.0
+    if permit.epa_debris_end is not None and permit.epa_debris_service_start is not None:
+        epa_service = permit.epa_debris_end - permit.epa_debris_service_start
+    if epa_waiting > 0 or epa_service > 0:
+        steps["EPA Debris"] = {"waiting": epa_waiting, "service": epa_service}
+
+    # USACE Debris
+    usace_waiting = permit.usace_debris_total_waiting
+    usace_service = 0.0
+    if permit.usace_debris_end is not None and permit.usace_debris_service_start is not None:
+        usace_service = permit.usace_debris_end - permit.usace_debris_service_start
+    if usace_waiting > 0 or usace_service > 0:
+        steps["USACE Debris"] = {"waiting": usace_waiting, "service": usace_service}
+
+    # Authorization (service only)
+    if permit.authorization_start is not None and permit.authorization_end is not None:
+        auth_service = permit.authorization_end - permit.authorization_start
+        if auth_service > 0:
+            steps["Authorization"] = {"waiting": 0.0, "service": auth_service}
+
+    # Plan preparation (service only)
+    if permit.plan_prep_start is not None and permit.plan_prep_end is not None:
+        prep_service = permit.plan_prep_end - permit.plan_prep_start
+        if prep_service > 0:
+            steps["Plan Preparation"] = {"waiting": 0.0, "service": prep_service}
+
+    # Applicant revisions (service only, no agency waiting)
+    if getattr(permit, "applicant_revisions_total_time", 0.0) > 0:
+        steps["Applicant Revisions"] = {
+            "waiting": 0.0,
+            "service": permit.applicant_revisions_total_time,
+        }
+
+    # Planning department (aggregate initial + recheck)
+    planning_waiting = permit.planning_initial_waiting + permit.planning_recheck_waiting
+    planning_service = permit.planning_initial_service + permit.planning_recheck_service
+    if planning_waiting > 0 or planning_service > 0:
+        steps["Planning"] = {"waiting": planning_waiting, "service": planning_service}
+
+    # Agency Referrals permits
+    misc_waiting = 0.0
+    misc_service = 0.0
+    if (
+        permit.misc_request is not None
+        and permit.misc_service_start is not None
+        and permit.misc_end is not None
+    ):
+        misc_waiting = permit.misc_service_start - permit.misc_request
+        misc_service = permit.misc_end - permit.misc_service_start
+    if misc_waiting > 0 or misc_service > 0:
+        steps["Agency Referrals"] = {"waiting": misc_waiting, "service": misc_service}
+
+    # Public Works (aggregate initial + recheck)
+    public_works_waiting = permit.public_works_total_waiting
+    public_works_service = (
+        permit.public_works_initial_service + permit.public_works_recheck_service
+    )
+    if public_works_waiting > 0 or public_works_service > 0:
+        steps["Public Works"] = {
+            "waiting": public_works_waiting,
+            "service": public_works_service,
+        }
+
+    # Fire Review (aggregate initial + recheck)
+    fire_waiting = permit.fire_initial_waiting + permit.fire_recheck_waiting
+    fire_service = permit.fire_initial_service + permit.fire_recheck_service
+    if fire_waiting > 0 or fire_service > 0:
+        steps["Fire Review"] = {"waiting": fire_waiting, "service": fire_service}
+
+    # Public Health Review (aggregate initial + recheck)
+    ph_waiting = permit.public_health_initial_waiting + permit.public_health_recheck_waiting
+    ph_service = permit.public_health_initial_service + permit.public_health_recheck_service
+    if ph_waiting > 0 or ph_service > 0:
+        steps["Public Health"] = {"waiting": ph_waiting, "service": ph_service}
+
+    return steps
 
 
-def plot_gantt_chart(permits: List[Permit], max_permits: int = 30, figsize=(14, 10)):
+def _gantt_intervals_from_permit(permit: Permit):
     """
-    Create a Gantt chart showing the timeline of each permit through the process.
-    
-    Args:
-        permits: List of Permit objects
-        max_permits: Maximum number of permits to display
-        figsize: Figure size tuple
+    Extract (start, end, label, color, is_waiting) for each activity interval from a permit.
+    Returns a list of tuples. Waiting and service are separate intervals where applicable.
     """
-    display_permits = permits[:max_permits]
-    
-    # Define stages in sequential order (left to right) as they occur in the process
-    # Format: (name, request_attr, service_start_attr, end_attr, waiting_color, service_color)
+    intervals = []
+    # Stages: (label, request_attr, service_start_attr, end_attr, waiting_color, service_color)
     stages_info = [
-        ('Debris Removal', 'debris_removal_request', 'debris_removal_service_start', 'debris_removal_end', '#FFB3B3', '#FF6B6B'),
-        ('Authorization', 'authorization_start', None, 'authorization_end', None, '#4ECDC4'),
-        ('Plan Preparation', 'plan_prep_start', None, 'plan_prep_end', None, '#45B7D1'),
-        ('Planning', 'planning_request', 'planning_service_start', 'planning_end', '#FFD4B3', '#FFA07A'),
-        ('Miscellaneous', 'misc_request', 'misc_service_start', 'misc_end', '#D4A5A5', '#C08080'),
-        ('Public Works', 'public_works_request', 'public_works_service_start', 'public_works_end', '#C8E8D8', '#98D8C8'),
-        ('Fire Review', 'fire_review_request', 'fire_review_service_start', 'fire_review_end', '#FBF3B3', '#F7DC6F'),
-        ('Public Health', 'public_health_request', 'public_health_service_start', 'public_health_end', '#E0C8E8', '#BB8FCE'),
+        ('EPA Debris', 'epa_debris_request', 'epa_debris_service_start', 'epa_debris_end', '#D9E1AD', '#98A83D'),
+        ('USACE Debris', 'usace_debris_request', 'usace_debris_service_start', 'usace_debris_end', '#D9E1AD', '#98A83D'),
+        ('Authorization', 'authorization_start', None, 'authorization_end', None, '#659DB2'),
+        ('Plan Preparation', 'plan_prep_start', None, 'plan_prep_end', None, '#659DB2'),
+        ('Planning', 'planning_request', 'planning_service_start', 'planning_end', '#F3DDA1', '#D9A71C'),
+        ('Agency Referrals', 'misc_request', 'misc_service_start', 'misc_end', '#F3DDA1', '#D9A71C'),
+        ('Public Works', 'public_works_request', 'public_works_service_start', 'public_works_end', '#F3DDA1', '#D9A71C'),
+        ('Fire Review', 'fire_review_request', 'fire_review_service_start', 'fire_review_end', '#F3DDA1', '#D9A71C'),
+        ('Public Health', 'public_health_request', 'public_health_service_start', 'public_health_end', '#F3DDA1', '#D9A71C'),
     ]
-    
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    y_positions = list(range(len(display_permits)))
-    y_labels = [f"Permit {p.permit_id} ({p.segment.name})" for p in display_permits]
-    
-    # Plot each stage for each permit in sequential order
-    for i, permit in enumerate(display_permits):
-        y_pos = len(display_permits) - i - 1
-        
-        for stage_info in stages_info:
-            stage_name, request_attr, service_start_attr, end_attr, waiting_color, service_color = stage_info
-            
-            # Get timestamps for this stage
-            request_time = getattr(permit, request_attr, None) if request_attr else None
-            service_start_time = getattr(permit, service_start_attr, None) if service_start_attr else None
-            end_time = getattr(permit, end_attr, None) if end_attr else None
-            
-            # Skip if this stage doesn't exist for this permit
-            if request_time is None or end_time is None:
+
+    # Intervals where the applicant is revising (no reviews should be active).
+    revision_intervals = sorted(
+        getattr(permit, "applicant_revision_intervals", []),
+        key=lambda x: x[0],
+    )
+
+    def carve_out_revisions(start, end, is_review_service):
+        """Return sub-intervals of [start, end] that do NOT overlap applicant revisions."""
+        if not is_review_service or not revision_intervals:
+            return [(start, end)]
+        result = []
+        cur = start
+        for rs, re in revision_intervals:
+            if re <= cur or rs >= end:
                 continue
-            
-            # Handle stages with waiting/service separation
-            if service_start_attr and service_start_time is not None:
-                # Show waiting time and service time separately
-                waiting_duration = service_start_time - request_time
-                service_duration = end_time - service_start_time
-                
-                # Always show waiting bar if there's any waiting time (even very small amounts)
-                if waiting_duration > 0.001:  # Small threshold to show even tiny waiting times
-                    ax.barh(y_pos, waiting_duration, left=request_time, height=0.6,
-                           color=waiting_color, alpha=0.6, edgecolor='black', 
-                           linewidth=0.5, hatch='///')
-                if service_duration > 0:
-                    ax.barh(y_pos, service_duration, left=service_start_time, height=0.6,
-                           color=service_color, alpha=0.8, edgecolor='black', linewidth=0.5)
-            else:
-                # No service start time (stages without waiting, like Authorization, Plan Prep)
-                duration = end_time - request_time
-                if duration > 0:
-                    ax.barh(y_pos, duration, left=request_time, height=0.6,
-                           color=service_color, alpha=0.8, edgecolor='black', linewidth=0.5,
-                           label=stage_name if i == 0 and stage_name not in [l.get_label() for l in ax.get_legend_handles_labels()[0] if hasattr(l, 'get_label')] else '')
-    
-    ax.set_yticks(y_positions)
-    ax.set_yticklabels(y_labels)
-    ax.set_xlabel('Time (days)', fontsize=12)
-    ax.set_title(f'Gantt Chart: Permit Processing Timeline (showing {len(display_permits)} permits)',
-                 fontsize=14, fontweight='bold')
-    ax.grid(axis='x', alpha=0.3)
-    
-    # Create legend - collect unique labels in order
-    legend_elements = []
-    seen_labels = set()
-    for stage_info in stages_info:
-        stage_name = stage_info[0]
-        waiting_color = stage_info[4]
-        service_color = stage_info[5]
-        
-        # Add waiting time entry if this stage has waiting
-        if waiting_color and f'{stage_name} (Waiting)' not in seen_labels:
-            legend_elements.append(mpatches.Patch(facecolor=waiting_color, alpha=0.6, 
-                                                 hatch='///', edgecolor='black', linewidth=0.5,
-                                                 label=f'{stage_name} (Waiting)'))
-            seen_labels.add(f'{stage_name} (Waiting)')
-        
-        # Add service time entry
-        if service_color and f'{stage_name} (Service)' not in seen_labels:
-            legend_elements.append(mpatches.Patch(facecolor=service_color, alpha=0.8, 
-                                                 edgecolor='black', linewidth=0.5,
-                                                 label=f'{stage_name} (Service)'))
-            seen_labels.add(f'{stage_name} (Service)')
-        
-        # For stages without waiting (like Authorization, Plan Prep), add a single entry
-        if not waiting_color and service_color and stage_name not in seen_labels:
-            legend_elements.append(mpatches.Patch(facecolor=service_color, alpha=0.8, 
-                                                 edgecolor='black', linewidth=0.5,
-                                                 label=stage_name))
-            seen_labels.add(stage_name)
-    
-    ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1, 1))
-    
-    plt.tight_layout()
-    
-    return fig, ax
+            if rs > cur:
+                result.append((cur, min(rs, end)))
+            cur = max(cur, re)
+            if cur >= end:
+                break
+        if cur < end:
+            result.append((cur, end))
+        return result
 
+    review_stages = {"Planning", "Agency Referrals", "Public Works", "Fire Review", "Public Health"}
 
-def plot_average_time_by_stage(permits: List[Permit], figsize=(10, 6)):
-    """
-    Create a bar chart showing average time spent in each stage across all permits.
-    
-    Args:
-        permits: List of Permit objects
-        figsize: Figure size tuple
-    """
-    # Stage order will be determined dynamically from calculate_stage_times
-    # Colors for all possible stages
-    colors = {
-        # Waiting times (lighter colors)
-        'Debris Removal (Waiting)': '#FFB3B3',
-        'Planning (Waiting)': '#FFD4B3',
-        'Public Works (Waiting)': '#C8E8D8',
-        'Fire Review (Waiting)': '#FBF3B3',
-        'Public Health (Waiting)': '#E0C8E8',
-        'Miscellaneous (Waiting)': '#D4A5A5',
-        'Other Waiting': '#E0E0E0',
-        # Service times (darker colors)
-        'Debris Removal (Service)': '#FF6B6B',
-        'Planning (Service)': '#FFA07A',
-        'Public Works (Service)': '#98D8C8',
-        'Fire Review (Service)': '#F7DC6F',
-        'Public Health (Service)': '#BB8FCE',
-        'Miscellaneous (Service)': '#C08080',
-        # Stages without waiting (service only)
-        'Authorization': '#4ECDC4',
-        'Plan Preparation': '#45B7D1',
-    }
-    
-    # Calculate averages - dynamically determine stages from data
-    stage_totals = {}
-    
-    for permit in permits:
-        stages = calculate_stage_times(permit)
-        for stage, duration in stages.items():
-            if stage not in stage_totals:
-                stage_totals[stage] = []
-            stage_totals[stage].append(duration)
-    
-    stage_averages = {stage: np.mean(values) if values else 0 
-                      for stage, values in stage_totals.items()}
-    
-    # Filter out stages with zero average, but always include key stages
-    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
-    stage_averages = {k: v for k, v in stage_averages.items() if v > 0 or k in key_stages}
-    
-    # Create bar chart
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    # Sort stages: waiting times first, then service times, then others
-    def sort_key(stage):
-        if '(Waiting)' in stage:
-            return (0, stage)
-        elif '(Service)' in stage:
-            return (1, stage)
+    for stage_name, request_attr, service_start_attr, end_attr, waiting_color, service_color in stages_info:
+        request_time = getattr(permit, request_attr, None) if request_attr else None
+        service_start_time = getattr(permit, service_start_attr, None) if service_start_attr else None
+        end_time = getattr(permit, end_attr, None) if end_attr else None
+        if request_time is None or end_time is None:
+            continue
+        if service_start_attr and service_start_time is not None:
+            wait_dur = service_start_time - request_time
+            if wait_dur > 0.001 and waiting_color:
+                intervals.append((request_time, service_start_time, f'{stage_name} (waiting)', waiting_color, True))
+            if end_time - service_start_time > 0 and service_color:
+                is_review_service = stage_name in review_stages
+                for seg_start, seg_end in carve_out_revisions(service_start_time, end_time, is_review_service):
+                    if seg_end - seg_start > 0:
+                        intervals.append((seg_start, seg_end, f'{stage_name} (service)', service_color, False))
         else:
-            return (2, stage)
-    
-    stages = sorted(stage_averages.keys(), key=sort_key)
-    averages = [stage_averages[s] for s in stages]
-    bar_colors = [colors.get(s, '#D3D3D3') for s in stages]
-    
-    bars = ax.bar(stages, averages, color=bar_colors, alpha=0.8, edgecolor='black')
-    
-    # Add value labels on bars
-    for bar in bars:
-        height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2., height,
-                f'{height:.1f}',
-                ha='center', va='bottom', fontsize=9)
-    
-    ax.set_xlabel('Process Stage', fontsize=12)
-    ax.set_ylabel('Average Time (days)', fontsize=12)
-    ax.set_title('Average Time Spent in Each Process Stage', fontsize=14, fontweight='bold')
-    ax.grid(axis='y', alpha=0.3)
-    
-    plt.xticks(rotation=45, ha='right')
+            if end_time - request_time > 0 and service_color:
+                intervals.append((request_time, end_time, stage_name, service_color, False))
+
+    # Applicant revisions: service-only intervals recorded on the permit
+    for start, end in getattr(permit, "applicant_revision_intervals", []):
+        if start is None or end is None:
+            continue
+        if end - start > 0:
+            # Use same blue as Authorization/Plan Preparation so they appear together visually
+            intervals.append((start, end, "Applicant Revisions", "#659DB2", False))
+    return intervals
+
+
+def _assign_lanes(intervals):
+    """
+    Assign each interval to a lane (row) so that overlapping intervals are on different lanes.
+    intervals: list of (start, end, label, color, is_waiting).
+    Returns: list of lanes; each lane is a list of (start, end, label, color, is_waiting).
+    """
+    # Sort by start time, then by end time
+    sorted_intervals = sorted(intervals, key=lambda x: (x[0], x[1]))
+    lanes = []  # lanes[i] = list of (start, end, label, color, is_waiting)
+    for iv in sorted_intervals:
+        start, end, label, color, is_waiting = iv
+        placed = False
+        for lane_idx, lane in enumerate(lanes):
+            if not any(s < end and e > start for s, e, *_ in lane):
+                lane.append(iv)
+                placed = True
+                break
+        if not placed:
+            lanes.append([iv])
+    return lanes
+
+
+def plot_gantt_single_permit(
+    permit: Permit = None,
+    permits: List[Permit] = None,
+    permit_id: Optional[int] = None,
+    figsize=(14, 5),
+    title: str = None,
+):
+    """
+    Create a Gantt chart for a single permit with parallel activities on separate rows
+    so that overlapping activities are visible on different bars.
+
+    Args:
+        permit: Single Permit object (use this when you have the permit directly)
+        permits: List of permits (use with permit_id to look up by ID)
+        permit_id: Permit ID to look up from permits list (use with permits)
+        figsize: Figure size tuple
+        title: Optional chart title (default: "Permit {id} (Segment {segment})")
+
+    Note: completed_permits is ordered by completion time, not permit_id. Use permit_id
+    to plot a specific permit by its ID, e.g. plot_gantt_single_permit(permits=sim.completed_permits, permit_id=237)
+    """
+    if permit is not None:
+        p = permit
+    elif permits is not None and permit_id is not None:
+        p = next((x for x in permits if x.permit_id == permit_id), None)
+        if p is None:
+            print(f"No permit found with permit_id={permit_id}. Available IDs: {[x.permit_id for x in permits[:10]]}...")
+            return None, None
+    else:
+        raise ValueError("Provide either permit= or (permits=, permit_id=)")
+
+    intervals = _gantt_intervals_from_permit(p)
+    if not intervals:
+        print("No activity intervals found for this permit.")
+        return None, None
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Define the four fixed rows the user requested
+    # Six fixed rows in logical order:
+    # 1) Debris removal
+    # 2) Authorization & Plan Preparation
+    # 3) Planning & Zoning (Planning + Agency Referrals)
+    # 4) Public Works
+    # 5) Fire
+    # 6) Public Health
+    row_definitions = [
+        ("Remove debris", ["EPA Debris", "USACE Debris"]),
+        ("Secure financing & prepare plans", ["Authorization", "Plan Preparation", "Applicant Revisions"]),
+        ("Permit reviews", ["Planning", "Agency Referrals", "Public Works"]),
+        ("Fire Review", ["Fire Review"])
+    ]
+    n_rows = len(row_definitions)
+    y_positions = list(range(n_rows))
+    # We'll place Debris at the top, then Planning/Agency Referrals/Public Works,
+    # then Fire Review, and Public Health at the bottom.
+    row_labels = [""] * n_rows
+
+    # Map base stage name -> logical row index, and build labels by display index
+    stage_to_row = {}
+    for idx, (row_name, stages) in enumerate(row_definitions):
+        display_y = n_rows - 1 - idx  # invert so first definition is topmost
+        row_labels[display_y] = row_name
+        for s in stages:
+            stage_to_row[s] = idx
+
+    bar_height = 0.65
+
+    # Define canonical order for legend (match stages_info from _gantt_intervals_from_permit)
+    legend_order = [
+        ('Remove debris (waiting)', True), ('Remove debris (service)', False),
+        ('Secure financing & prepare plans', False),
+        ('Permit reviews (waiting)', True), ('Permit reviews (service)', False),
+    ]
+    seen = set()  # (label, is_waiting)
+    label_to_color = {}  # (label, is_waiting) -> color
+    for start, end, label, color, is_waiting in intervals:
+        key = (label, is_waiting)
+        if key not in seen:
+            seen.add(key)
+            label_to_color[key] = color
+
+    # Plot each interval on the appropriate fixed row
+    for start, end, label, color, is_waiting in intervals:
+        duration = end - start
+        if duration <= 0:
+            continue
+        base = label.replace(" (waiting)", "").replace(" (service)", "")
+        logical_row = stage_to_row.get(base)
+        if logical_row is None:
+            # Skip stages that are not in the four requested rows
+            continue
+        # Map logical row (0 = Debris, 1 = Planning/Agency Referrals/PW, 2 = Fire, 3 = Public Health)
+        # to display coordinate so Debris is at the top.
+        y_pos = n_rows - 1 - logical_row
+        hatch = "///" if is_waiting else None
+        alpha = 0.6 if is_waiting else 0.9
+        ax.barh(
+            y_pos,
+            duration,
+            left=start,
+            height=bar_height,
+            color=color,
+            alpha=alpha,
+            edgecolor="black",
+            linewidth=0.5,
+            hatch=hatch,
+        )
+
+    # Build legend in canonical order, only for labels that appear in this permit
+    legend_handles = []
+    for label, is_waiting in legend_order:
+        key = (label, is_waiting)
+        if key not in label_to_color:
+            continue
+        color = label_to_color[key]
+        hatch = "///" if is_waiting else None
+        alpha = 0.6 if is_waiting else 0.9
+        patch = mpatches.Patch(
+            facecolor=color,
+            alpha=alpha,
+            edgecolor="black",
+            linewidth=0.5,
+            hatch=hatch,
+            label=label,
+        )
+        legend_handles.append(patch)
+    ax.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=15)
+
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(row_labels, fontsize=16)
+    ax.set_xlabel('Time (days)', fontsize=18)
+    if title is None:
+        title = f"Gantt: Permit {p.permit_id} ({p.segment.name})"
+    ax.set_title(title, fontsize=20, fontweight='bold')
+    ax.tick_params(axis='x', labelsize=15)
+    ax.grid(axis='x', alpha=0.3)
     plt.tight_layout()
-    
     return fig, ax
 
 
-def plot_time_by_segment(permits: List[Permit], figsize=(12, 6)):
+def plot_gantt_three_random_permits(
+    permits: List[Permit],
+    n_permits: int = 3,
+    segment_value: Optional[int] = None,
+    random_seed: Optional[int] = None,
+    figsize=(14, 8),
+):
     """
-    Create a grouped bar chart showing average time per stage by permit segment.
-    
+    Plot a Gantt chart showing multiple random permits in the same chart.
+
     Args:
-        permits: List of Permit objects
+        permits: List of completed Permit objects
+        n_permits: Number of permits to show (default 3)
+        segment_value: If provided, only pick permits from this segment (e.g. 4 = CUSTOM_NON_LIKE)
+        random_seed: Optional seed for reproducible random choice
         figsize: Figure size tuple
     """
     from permit_simulation import Segment
-    
-    # Group permits by segment
-    segment_permits = {segment: [] for segment in Segment}
-    for permit in permits:
-        segment_permits[permit.segment].append(permit)
-    
-    # Calculate averages per segment - collect all stages dynamically
-    segment_data = {}
-    all_stages = set()
-    
-    for segment, seg_permits in segment_permits.items():
-        if not seg_permits:
-            continue
-        
-        # Collect all stages that appear in the data
-        stage_totals = {}
-        for permit in seg_permits:
-            stages = calculate_stage_times(permit)
-            for stage_name, duration in stages.items():
-                all_stages.add(stage_name)
-                if stage_name not in stage_totals:
-                    stage_totals[stage_name] = []
-                stage_totals[stage_name].append(duration)
-        
-        segment_data[segment] = {
-            stage: np.mean(values) if values else 0
-            for stage, values in stage_totals.items()
-        }
-    
-    # Define preferred order for display
-    preferred_order = [
-        'Debris Removal (Waiting)',
-        'Debris Removal (Service)',
-        'Authorization',
-        'Plan Preparation',
-        'Planning (Waiting)',
-        'Planning (Service)',
-        'Public Works (Waiting)',
-        'Public Works (Service)',
-        'Fire Review (Waiting)',
-        'Fire Review (Service)',
-        'Public Health (Waiting)',
-        'Public Health (Service)',
-        'Miscellaneous (Waiting)',
-        'Miscellaneous (Service)',
-    ]
-    
-    # Filter to only stages with data, maintaining preferred order
-    # Always include key stages even if they don't appear in all_stages (for consistency)
-    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
-    stage_order = [s for s in preferred_order if s in all_stages or s in key_stages]
-    # Add any remaining stages not in preferred order
-    for stage in sorted(all_stages):
-        if stage not in stage_order:
-            stage_order.append(stage)
-    
-    if not stage_order:
-        print("Warning: No stage data found for any segment")
+
+    if segment_value is not None:
+        try:
+            segment = Segment(segment_value)
+            pool = [p for p in permits if p.segment == segment]
+        except ValueError:
+            pool = list(permits)
+    else:
+        pool = list(permits)
+
+    if len(pool) < n_permits:
+        n_permits = len(pool)
+    if not pool:
+        print("No permits available to plot.")
         return None, None
-    
-    # Create grouped bar chart
+
+    rng = np.random.default_rng(random_seed)
+    selected = rng.choice(pool, size=min(n_permits, len(pool)), replace=False)
+
+    row_definitions = [
+        ("Debris removal", ["EPA Debris", "USACE Debris"]),
+        ("Authorization & Plan preparation", ["Authorization", "Plan Preparation", "Applicant Revisions"]),
+        ("Permit reviews", ["Planning", "Agency Referrals", "Public Works"]),
+        ("Fire Review", ["Fire Review"]),
+    ]
+    n_rows_per_permit = len(row_definitions)
+    stage_to_row = {}
+    for idx, (_, stages) in enumerate(row_definitions):
+        for s in stages:
+            stage_to_row[s] = idx
+
+    all_row_labels = []
+    for perm in selected:
+        for row_name, _ in row_definitions:
+            all_row_labels.append(f"Permit {perm.permit_id} – {row_name}")
+
     fig, ax = plt.subplots(figsize=figsize)
-    
-    x = np.arange(len(stage_order))
-    width = 0.15
-    multiplier = 0
-    
-    colors_map = {
-        Segment.PRE_APPROVED_LIKE: '#2E7D32',
-        Segment.PRE_APPROVED_NON_LIKE: '#81C784',
-        Segment.CUSTOM_LIKE: '#1565C0',
-        Segment.CUSTOM_NON_LIKE: '#90CAF9',
-        Segment.SELF_CERT_LIKE: '#EF6C00',
-        Segment.SELF_CERT_NON_LIKE: '#FFB74D',
+    bar_height = 0.65
+
+    # Map raw stage names to grouped legend labels (for waiting vs active)
+    legend_group = {
+        "EPA Debris": "Debris removal",
+        "USACE Debris": "Debris removal",
+        "Authorization": "Authorization & Plan preparation",
+        "Plan Preparation": "Authorization & Plan preparation",
+        "Planning": "Permit reviews",
+        "Agency Referrals": "Permit reviews",
+        "Public Works": "Permit reviews",
+        "Applicant Revisions": "Authorization & Plan preparation",
     }
-    
-    for segment, data in segment_data.items():
-        if not any(data.values()):  # Skip if no data
+
+    legend_order = [
+        ("Debris removal (waiting)", True), ("Debris removal (active)", False),
+        ("Authorization & Plan preparation (waiting)", True), ("Authorization & Plan preparation (active)", False),
+        ("Permit reviews (waiting)", True), ("Permit reviews (active)", False),
+    ]
+    label_to_color = {}
+    seen_legend = set()
+
+    for perm_idx, permit in enumerate(selected):
+        intervals = _gantt_intervals_from_permit(permit)
+        y_offset = perm_idx * n_rows_per_permit
+
+        for start, end, label, color, is_waiting in intervals:
+            base = label.replace(" (waiting)", "").replace(" (service)", "")
+            group = legend_group.get(base)
+            if group is None:
+                continue
+            suffix = "(waiting)" if is_waiting else "(active)"
+            legend_key = (f"{group} {suffix}", is_waiting)
+            if legend_key not in seen_legend:
+                seen_legend.add(legend_key)
+                label_to_color[legend_key] = color
+
+        for start, end, label, color, is_waiting in intervals:
+            duration = end - start
+            if duration <= 0:
+                continue
+            base = label.replace(" (waiting)", "").replace(" (service)", "")
+            logical_row = stage_to_row.get(base)
+            if logical_row is None:
+                continue
+            y_pos = y_offset + logical_row
+            hatch = "///" if is_waiting else None
+            alpha = 0.6 if is_waiting else 0.9
+            ax.barh(
+                y_pos,
+                duration,
+                left=start,
+                height=bar_height,
+                color=color,
+                alpha=alpha,
+                edgecolor="black",
+                linewidth=0.5,
+                hatch=hatch,
+            )
+
+    # Horizontal dashed lines separating each permit
+    for i in range(1, n_permits):
+        y_sep = i * n_rows_per_permit - 0.5
+        ax.axhline(y=y_sep, linestyle='--', color='gray', alpha=0.7, linewidth=1.5)
+
+    legend_handles = []
+    for label, is_waiting in legend_order:
+        key = (label, is_waiting)
+        if key not in label_to_color:
             continue
-        
-        offset = width * multiplier
-        values = [data.get(stage, 0) for stage in stage_order]
-        bars = ax.bar(x + offset, values, width, label=segment.name, 
-                     color=colors_map.get(segment, '#D3D3D3'), alpha=0.8)
-        multiplier += 1
-    
-    ax.set_xlabel('Process Stage', fontsize=12)
-    ax.set_ylabel('Average Time (days)', fontsize=12)
-    ax.set_title('Average Time per Stage by Permit Segment', fontsize=14, fontweight='bold')
-    ax.set_xticks(x + width * (multiplier - 1) / 2 if multiplier > 0 else x)
-    ax.set_xticklabels(stage_order, rotation=45, ha='right')
-    ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
-    ax.grid(axis='y', alpha=0.3)
-    
+        color = label_to_color[key]
+        hatch = "///" if is_waiting else None
+        alpha = 0.6 if is_waiting else 0.9
+        legend_handles.append(mpatches.Patch(
+            facecolor=color, alpha=alpha, edgecolor="black", linewidth=0.5,
+            hatch=hatch, label=label,
+        ))
+    ax.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=15)
+
+    n_total_rows = n_permits * n_rows_per_permit
+    ax.set_yticks(range(n_total_rows))
+    ax.set_yticklabels([])
+    ax.set_xlabel('Time (days)', fontsize=18)
+    ax.tick_params(axis='x', labelsize=15)
+    ax.grid(axis='x', alpha=0.3)
+    ax.invert_yaxis()
     plt.tight_layout()
-    
     return fig, ax
 
 
-def plot_time_by_segment_like_for_like(permits: List[Permit], figsize=(12, 6)):
+def plot_gantt_one_random_permit_segment(
+    permits: List[Permit],
+    segment_value: int = 4,
+    random_seed: Optional[int] = None,
+    figsize=(14, 5),
+):
     """
-    Create a grouped bar chart showing average time per stage for Like-for-like segments only.
-    Includes: PRE_APPROVED_LIKE, CUSTOM_LIKE, SELF_CERT_LIKE
-    
+    Plot a Gantt chart for one random permit in the given segment.
+    Segment 4 = CUSTOM_NON_LIKE. Parallel activities are shown on separate rows.
+
     Args:
-        permits: List of Permit objects
+        permits: List of completed Permit objects
+        segment_value: Segment enum value (default 4 = CUSTOM_NON_LIKE)
+        random_seed: Optional seed for reproducible random choice
         figsize: Figure size tuple
     """
     from permit_simulation import Segment
-    
-    # Filter to only like-for-like segments
-    like_for_like_segments = [Segment.PRE_APPROVED_LIKE, Segment.CUSTOM_LIKE, Segment.SELF_CERT_LIKE]
-    filtered_permits = [p for p in permits if p.segment in like_for_like_segments]
-    
-    if not filtered_permits:
-        print("Warning: No like-for-like permits found")
+    try:
+        segment = Segment(segment_value)
+    except ValueError:
+        segment = Segment.CUSTOM_NON_LIKE
+    segment_permits = [p for p in permits if p.segment == segment]
+    if not segment_permits:
+        print(f"No permits found for segment {segment.name} (value {segment_value}).")
         return None, None
-    
-    # Group permits by segment
-    segment_permits = {segment: [] for segment in like_for_like_segments}
-    for permit in filtered_permits:
-        segment_permits[permit.segment].append(permit)
-    
-    # Calculate averages per segment - collect all stages dynamically
-    segment_data = {}
-    all_stages = set()
-    
-    for segment, seg_permits in segment_permits.items():
-        if not seg_permits:
-            continue
-        
-        # Collect all stages that appear in the data
-        stage_totals = {}
-        for permit in seg_permits:
-            stages = calculate_stage_times(permit)
-            for stage_name, duration in stages.items():
-                all_stages.add(stage_name)
-                if stage_name not in stage_totals:
-                    stage_totals[stage_name] = []
-                stage_totals[stage_name].append(duration)
-        
-        segment_data[segment] = {
-            stage: np.mean(values) if values else 0
-            for stage, values in stage_totals.items()
-        }
-    
-    # Define preferred order for display
-    preferred_order = [
-        'Debris Removal (Waiting)',
-        'Debris Removal (Service)',
-        'Authorization',
-        'Plan Preparation',
-        'Planning (Waiting)',
-        'Planning (Service)',
-        'Public Works (Waiting)',
-        'Public Works (Service)',
-        'Fire Review (Waiting)',
-        'Fire Review (Service)',
-        'Public Health (Waiting)',
-        'Public Health (Service)',
-        'Miscellaneous (Waiting)',
-        'Miscellaneous (Service)',
-    ]
-    
-    # Filter to only stages with data, maintaining preferred order
-    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
-    stage_order = [s for s in preferred_order if s in all_stages or s in key_stages]
-    # Add any remaining stages not in preferred order
-    for stage in sorted(all_stages):
-        if stage not in stage_order:
-            stage_order.append(stage)
-    
-    if not stage_order:
-        print("Warning: No stage data found for any segment")
-        return None, None
-    
-    # Create grouped bar chart
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    x = np.arange(len(stage_order))
-    width = 0.25
-    multiplier = 0
-    
-    colors_map = {
-        Segment.PRE_APPROVED_LIKE: '#2E7D32',
-        Segment.CUSTOM_LIKE: '#1565C0',
-        Segment.SELF_CERT_LIKE: '#EF6C00',
-    }
-    
-    for segment in like_for_like_segments:
-        if segment not in segment_data or not any(segment_data[segment].values()):
-            continue
-        
-        data = segment_data[segment]
-        offset = width * multiplier
-        values = [data.get(stage, 0) for stage in stage_order]
-        bars = ax.bar(x + offset, values, width, label=segment.name, 
-                     color=colors_map.get(segment, '#D3D3D3'), alpha=0.8)
-        multiplier += 1
-    
-    ax.set_xlabel('Process Stage', fontsize=12)
-    ax.set_ylabel('Average Time (days)', fontsize=12)
-    ax.set_title('Average Time per Stage by Permit Segment (Like-for-like Only)', fontsize=14, fontweight='bold')
-    ax.set_xticks(x + width * (multiplier - 1) / 2 if multiplier > 0 else x)
-    ax.set_xticklabels(stage_order, rotation=45, ha='right')
-    ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
-    ax.grid(axis='y', alpha=0.3)
-    
-    plt.tight_layout()
-    
-    return fig, ax
-
-
-def plot_time_by_segment_non_like_for_like(permits: List[Permit], figsize=(12, 6)):
-    """
-    Create a grouped bar chart showing average time per stage for Non-like-for-like segments only.
-    Includes: PRE_APPROVED_NON_LIKE, CUSTOM_NON_LIKE, SELF_CERT_NON_LIKE
-    
-    Args:
-        permits: List of Permit objects
-        figsize: Figure size tuple
-    """
-    from permit_simulation import Segment
-    
-    # Filter to only non-like-for-like segments
-    non_like_for_like_segments = [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]
-    filtered_permits = [p for p in permits if p.segment in non_like_for_like_segments]
-    
-    if not filtered_permits:
-        print("Warning: No non-like-for-like permits found")
-        return None, None
-    
-    # Group permits by segment
-    segment_permits = {segment: [] for segment in non_like_for_like_segments}
-    for permit in filtered_permits:
-        segment_permits[permit.segment].append(permit)
-    
-    # Calculate averages per segment - collect all stages dynamically
-    segment_data = {}
-    all_stages = set()
-    
-    for segment, seg_permits in segment_permits.items():
-        if not seg_permits:
-            continue
-        
-        # Collect all stages that appear in the data
-        stage_totals = {}
-        for permit in seg_permits:
-            stages = calculate_stage_times(permit)
-            for stage_name, duration in stages.items():
-                all_stages.add(stage_name)
-                if stage_name not in stage_totals:
-                    stage_totals[stage_name] = []
-                stage_totals[stage_name].append(duration)
-        
-        segment_data[segment] = {
-            stage: np.mean(values) if values else 0
-            for stage, values in stage_totals.items()
-        }
-    
-    # Define preferred order for display
-    preferred_order = [
-        'Debris Removal (Waiting)',
-        'Debris Removal (Service)',
-        'Authorization',
-        'Plan Preparation',
-        'Planning (Waiting)',
-        'Planning (Service)',
-        'Public Works (Waiting)',
-        'Public Works (Service)',
-        'Fire Review (Waiting)',
-        'Fire Review (Service)',
-        'Public Health (Waiting)',
-        'Public Health (Service)',
-        'Miscellaneous (Waiting)',
-        'Miscellaneous (Service)',
-    ]
-    
-    # Filter to only stages with data, maintaining preferred order
-    key_stages = ['Debris Removal (Waiting)', 'Debris Removal (Service)', 'Authorization', 'Plan Preparation']
-    stage_order = [s for s in preferred_order if s in all_stages or s in key_stages]
-    # Add any remaining stages not in preferred order
-    for stage in sorted(all_stages):
-        if stage not in stage_order:
-            stage_order.append(stage)
-    
-    if not stage_order:
-        print("Warning: No stage data found for any segment")
-        return None, None
-    
-    # Create grouped bar chart
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    x = np.arange(len(stage_order))
-    width = 0.25
-    multiplier = 0
-    
-    colors_map = {
-        Segment.PRE_APPROVED_NON_LIKE: '#81C784',
-        Segment.CUSTOM_NON_LIKE: '#90CAF9',
-        Segment.SELF_CERT_NON_LIKE: '#FFB74D',
-    }
-    
-    for segment in non_like_for_like_segments:
-        if segment not in segment_data or not any(segment_data[segment].values()):
-            continue
-        
-        data = segment_data[segment]
-        offset = width * multiplier
-        values = [data.get(stage, 0) for stage in stage_order]
-        bars = ax.bar(x + offset, values, width, label=segment.name, 
-                     color=colors_map.get(segment, '#D3D3D3'), alpha=0.8)
-        multiplier += 1
-    
-    ax.set_xlabel('Process Stage', fontsize=12)
-    ax.set_ylabel('Average Time (days)', fontsize=12)
-    ax.set_title('Average Time per Stage by Permit Segment (Non-like-for-like Only)', fontsize=14, fontweight='bold')
-    ax.set_xticks(x + width * (multiplier - 1) / 2 if multiplier > 0 else x)
-    ax.set_xticklabels(stage_order, rotation=45, ha='right')
-    ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
-    ax.grid(axis='y', alpha=0.3)
-    
-    plt.tight_layout()
-    
-    return fig, ax
+    rng = np.random.default_rng(random_seed)
+    permit = rng.choice(segment_permits)
+    return plot_gantt_single_permit(permit, figsize=figsize)
 
 
 def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxplot=True):
@@ -726,8 +646,25 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
         print("No data to plot for total time by segment.")
         return None, None
     
-    segments = list(segment_data.keys())
-    labels = [s.name for s in segments]
+    # Use stable segment order and friendly labels (match quartiles plot)
+    segment_order = [
+        Segment.CUSTOM_LIKE,
+        Segment.PRE_APPROVED_LIKE,
+        Segment.SELF_CERT_LIKE,
+        Segment.CUSTOM_NON_LIKE,
+        Segment.PRE_APPROVED_NON_LIKE,
+        Segment.SELF_CERT_NON_LIKE,
+    ]
+    label_by_segment = {
+        Segment.PRE_APPROVED_LIKE: "Pre-approved like",
+        Segment.PRE_APPROVED_NON_LIKE: "Pre-approved non-like",
+        Segment.CUSTOM_LIKE: "Custom like",
+        Segment.CUSTOM_NON_LIKE: "Custom non-like",
+        Segment.SELF_CERT_LIKE: "Self-certified like",
+        Segment.SELF_CERT_NON_LIKE: "Self-certified non-like",
+    }
+    segments = [s for s in segment_order if s in segment_data]
+    labels = [label_by_segment[s] for s in segments]
     
     fig, ax = plt.subplots(figsize=figsize)
     
@@ -736,8 +673,8 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
         bp = ax.boxplot(data, patch_artist=True, vert=True, showmeans=True, 
                         medianprops={'color': 'red'}, meanprops={'marker': 'o', 'markeredgecolor': 'black', 'markerfacecolor': 'green'})
         
-        # Add colors to box plots
-        colors = ['#2E7D32', '#81C784', '#1565C0', '#90CAF9', '#EF6C00', '#FFB74D']
+        # Add colors to box plots (match quartiles chart: Custom like, Pre-approved like, Self-cert like, then non-like)
+        colors = ['#1565C0', '#2E7D32', '#EF6C00', '#90CAF9', '#81C784', '#FFB74D']
         for patch, color in zip(bp['boxes'], colors[:len(segments)]):
             patch.set_facecolor(color)
         
@@ -748,11 +685,15 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
             ax.text(i + 1, np.max(data[i]) + 0.05 * (np.max(data[i]) - np.min(data[i])), f'n={count}',
                     horizontalalignment='center', verticalalignment='bottom', fontsize=9, color='gray')
         
-        # Add dashed reference lines for 1 year and 2 years
+        # Add dashed reference lines for 1 year and 2 years with text labels
         one_year = 365
         two_years = 730
-        ax.axhline(y=one_year, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label='1 Year')
-        ax.axhline(y=two_years, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label='2 Years')
+        ax.axhline(y=one_year, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+        ax.axhline(y=two_years, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+        ax.text(1.02, one_year, ' 1 Year', transform=ax.get_yaxis_transform(), ha='left', va='center',
+                fontsize=10, color='gray', alpha=0.8)
+        ax.text(1.02, two_years, ' 2 Years', transform=ax.get_yaxis_transform(), ha='left', va='center',
+                fontsize=10, color='gray', alpha=0.8)
         
         ax.set_ylabel('Total Time (days)', fontsize=12)
         ax.set_title('Total Time from Disaster to Construction Start by Segment (Box Plot)', fontsize=14, fontweight='bold')
@@ -774,66 +715,431 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
     return fig, ax
 
 
-def visualize_all(permits: List[Permit], save_prefix: str = None):
+def plot_total_time_by_segment_quartiles(permits: List[Permit], figsize=(10, 6)):
     """
-    Create all visualizations and optionally save them.
-    
+    Create a bar chart of total time from disaster to construction start by segment,
+    showing median with 25th and 75th percentile as error bars.
+
     Args:
         permits: List of Permit objects
-        save_prefix: If provided, save figures with this prefix
+        figsize: Figure size tuple
+    """
+    from permit_simulation import Segment
+
+    segment_times = {segment: [] for segment in Segment}
+    for permit in permits:
+        if permit.ready_for_construction is not None and permit.created_at is not None:
+            total_time = permit.ready_for_construction - permit.created_at
+            segment_times[permit.segment].append(total_time)
+
+    segment_data = {s: times for s, times in segment_times.items() if times}
+    if not segment_data:
+        print("No data to plot for total time by segment.")
+        return None, None
+
+    # Enforce a stable segment order so bars and labels always align.
+    segment_order = [
+        Segment.CUSTOM_LIKE,
+        Segment.PRE_APPROVED_LIKE,
+        Segment.SELF_CERT_LIKE,
+        Segment.CUSTOM_NON_LIKE,
+        Segment.PRE_APPROVED_NON_LIKE,
+        Segment.SELF_CERT_NON_LIKE,
+    ]
+    label_by_segment = {
+        Segment.CUSTOM_LIKE: "Custom like",
+        Segment.PRE_APPROVED_LIKE: "Pre-approved like",
+        Segment.SELF_CERT_LIKE: "Self-certified like",
+        Segment.CUSTOM_NON_LIKE: "Custom non-like",
+        Segment.PRE_APPROVED_NON_LIKE: "Pre-approved non-like",
+        Segment.SELF_CERT_NON_LIKE: "Self-certified non-like",
+    }
+
+    segments = [s for s in segment_order if s in segment_data]
+    labels = [label_by_segment[s] for s in segments]
+
+    medians = [np.median(segment_data[s]) for s in segments]
+    p25 = [np.percentile(segment_data[s], 25) for s in segments]
+    p75 = [np.percentile(segment_data[s], 75) for s in segments]
+
+    # Asymmetric error bars: lower = median - p25, upper = p75 - median
+    yerr_lower = [medians[i] - p25[i] for i in range(len(segments))]
+    yerr_upper = [p75[i] - medians[i] for i in range(len(segments))]
+    yerr = [yerr_lower, yerr_upper]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    colors = ['#1565C0', '#2E7D32', '#EF6C00', '#90CAF9', '#81C784' , '#FFB74D']
+    x = np.arange(len(segments))
+    bars = ax.bar(x, medians, yerr=yerr, capsize=5, color=colors[:len(segments)], alpha=0.8, edgecolor='black')
+
+    # Overlay outlier points (above 75th percentile only) in a straight line
+    for i, s in enumerate(segments):
+        times = np.array(segment_data[s])
+        outliers = times[times > p75[i]]
+        if len(outliers) > 0:
+            ax.scatter(np.full(len(outliers), x[i]), outliers, color='black', alpha=0.4, s=20, zorder=5)
+
+    # Add sample size (n)
+    for i, s in enumerate(segments):
+        count = len(segment_data[s])
+        ax.text(i, p75[i] + 0.02 * (p75[i] - p25[i]) if p75[i] != p25[i] else medians[i] + 5, f'n={count}',
+                horizontalalignment='center', verticalalignment='bottom', fontsize=9, color='gray')
+
+    one_year = 365
+    ax.axhline(y=one_year, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax.text(1.02, one_year, ' 1 Year', transform=ax.get_yaxis_transform(), ha='left', va='center',
+            fontsize=10, color='gray', alpha=0.8)
+
+    ax.set_ylabel('Total Time (days)', fontsize=12)
+    ax.set_title('Total Time from Disaster to Construction Start by Segment (Median, 25th–75th percentiles)', fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha='right')
+    ax.grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    return fig, ax
+
+
+def plot_median_total_time_by_process(
+    permits_by_process: dict,
+    figsize=(12, 6),
+):
+    """
+    Create a grouped bar chart of median total time (disaster to construction start)
+    by segment for Standard, Sequential, and Parallel process.
+
+    Args:
+        permits_by_process: Dict mapping process name (e.g. "Standard", "Sequential", "Parallel")
+            to list of completed Permit objects.
+        figsize: Figure size tuple.
+    """
+    from permit_simulation import Segment
+
+    segment_order = [
+        Segment.CUSTOM_LIKE,
+        Segment.PRE_APPROVED_LIKE,
+        Segment.SELF_CERT_LIKE,
+        Segment.CUSTOM_NON_LIKE,
+        Segment.PRE_APPROVED_NON_LIKE,
+        Segment.SELF_CERT_NON_LIKE,
+    ]
+
+    # Build median total time per (process, segment)
+    # permits_by_process: {"Standard": [permits], "Sequential": [permits], "Parallel": [permits]}
+    process_names = list(permits_by_process.keys())
+    medians = {pname: {} for pname in process_names}
+
+    for pname, permits in permits_by_process.items():
+        for seg in segment_order:
+            times = [
+                p.ready_for_construction - p.created_at
+                for p in permits
+                if p.segment == seg and p.ready_for_construction is not None
+            ]
+            medians[pname][seg] = float(np.median(times)) if times else np.nan
+
+    # Only include segments that have at least one non-NaN median across processes
+    segments_to_plot = [
+        seg for seg in segment_order
+        if any(not np.isnan(medians[p].get(seg, np.nan)) for p in process_names)
+    ]
+    if not segments_to_plot:
+        print("No segment data to plot.")
+        return None, None
+
+    labels = ["Custom like", "Pre-approved like", "Self-certified like", "Custom non-like", "Pre-approved non-like", "Self-certified non-like"]
+    x = np.arange(len(labels))
+    width = 0.25
+    n_processes = len(process_names)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    colors = {
+        "Standard": "#1976D2",
+        "Sequential": "#F57C00",
+        "Parallel": "#388E3C",
+        "Initial AI Check": "#F57C00",
+        "Full AI Review": "#388E3C",
+    }
+    for i, pname in enumerate(process_names):
+        offset = width * (i - (n_processes - 1) / 2)
+        values = [medians[pname].get(seg, np.nan) for seg in segments_to_plot]
+        values = [v if not np.isnan(v) else 0 for v in values]
+        color = colors.get(pname, "#888888")
+        ax.bar(x + offset, values, width, label=pname, color=color, alpha=0.85, edgecolor="black", linewidth=0.5)
+
+    ax.set_ylabel("Median total time (days)", fontsize=12)
+    ax.set_xlabel("Segment", fontsize=12)
+    ax.set_title("Median total time from disaster to construction start by segment", fontsize=14, fontweight="bold")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=11)
+    ax.grid(axis="y", alpha=0.3)
+
+    plt.tight_layout()
+    return fig, ax
+
+
+def plot_average_waiting_and_service_by_step(
+    permits: List[Permit],
+    figsize=(10, 6),
+    label_map: Optional[dict] = None,
+):
+    """
+    Create a bar chart showing average total waiting vs service time for each
+    major process step (EPA, USACE, Planning, Public Works, etc.), with
+    initial and recheck times aggregated together.
+
+    Args:
+        permits: List of Permit objects
+        figsize: Figure size tuple
+        label_map: Optional dict mapping internal step name to display label.
+                   Internal names: EPA Debris, USACE Debris, Authorization,
+                   Plan Preparation, Planning, Agency Referrals, Public Works,
+                   Fire Review, Public Health.
+    """
+    if not permits:
+        print("No permits provided for waiting/service by step chart.")
+        return None, None
+
+    # Accumulate per-step waiting and service times across permits
+    step_waiting = {}
+    step_service = {}
+
+    for permit in permits:
+        totals = calculate_step_waiting_service_totals(permit)
+        for step_name, values in totals.items():
+            step_waiting.setdefault(step_name, []).append(values["waiting"])
+            step_service.setdefault(step_name, []).append(values["service"])
+
+    if not step_waiting:
+        print("No step data found for waiting/service chart.")
+        return None, None
+
+    # Define preferred order to match process flow (keys from calculate_step_waiting_service_totals)
+    preferred_order = [
+        "EPA Debris",
+        "USACE Debris",
+        "Authorization",
+        "Plan Preparation",
+        "Planning",
+        "Agency Referrals",
+        "Public Works",
+        "Fire Review",
+        "Public Health",
+    ]
+
+    steps = [s for s in preferred_order if s in step_waiting]
+    # Add any remaining steps not in preferred order
+    for step in sorted(step_waiting.keys()):
+        if step not in steps:
+            steps.append(step)
+
+    waiting_means = [np.mean(step_waiting[s]) for s in steps]
+    waiting_stds = [np.std(step_waiting[s]) for s in steps]
+    service_means = [np.mean(step_service.get(s, [0.0])) for s in steps]
+    service_stds = [np.std(step_service.get(s, [0.0])) for s in steps]
+
+    x = np.arange(len(steps))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    bars_wait = ax.bar(
+        x - width / 2,
+        waiting_means,
+        width,
+        label="Waiting",
+        color="#BDBDBD",
+        edgecolor="black",
+    )
+    bars_service = ax.bar(
+        x + width / 2,
+        service_means,
+        width,
+        label="Service",
+        color="#81C784",
+        edgecolor="black",
+    )
+
+    # Add value labels (means) above each bar
+    for bar in list(bars_wait) + list(bars_service):
+        height = bar.get_height()
+        ax.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height,
+            f"{height:.1f}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+    # Print summary statistics (mean and standard deviation) in text after the graph
+    print("Average waiting and service time by step (days):")
+    for step, w_mean, w_std, s_mean, s_std in zip(
+        steps, waiting_means, waiting_stds, service_means, service_stds
+    ):
+        print(
+            f"  {step}: "
+            f"waiting mean={w_mean:.2f}, σ={w_std:.2f}; "
+            f"service mean={s_mean:.2f}, σ={s_std:.2f}"
+        )
+
+
+def plot_permits_by_stage_over_time(
+    permits: List[Permit],
+    stages: Optional[List[str]] = None,
+    include_waiting: bool = True,
+    include_service: bool = True,
+    num_points: int = 200,
+    figsize=(12, 6),
+):
+    """
+    Plot the total number of permits active in each stage over time.
+
+    This uses the same stage definitions as the Gantt chart helper
+    (_gantt_intervals_from_permit), and counts a permit as \"in a stage\"
+    whenever it is either waiting or in service for that stage (configurable).
+
+    Args:
+        permits: List of Permit objects.
+        stages: Optional list of stage labels to include. If None, uses all
+                stages seen in the intervals (e.g. 'Planning', 'Public Works').
+                Note: waiting/service variants like 'Planning (waiting)' and
+                'Planning (service)' are collapsed to 'Planning'.
+        include_waiting: If True, count waiting intervals for each stage.
+        include_service: If True, count service intervals for each stage.
+        num_points: Number of time samples between earliest start and latest
+                    end to estimate counts.
+        figsize: Matplotlib figure size.
+    """
+    if not permits:
+        print("No permits provided for stage-over-time chart.")
+        return None, None
+
+    # Collect FIRST time each permit reaches each stage (for cumulative curves)
+    stage_first_times: dict[str, list[float]] = {}
+    t_min = None
+    t_max = None
+
+    for permit in permits:
+        per_permit_first: dict[str, float] = {}
+        for start, end, label, _color, is_waiting in _gantt_intervals_from_permit(permit):
+            # Collapse 'Planning (waiting)' / 'Planning (service)' -> 'Planning'
+            base_label = label.split(" (")[0]
+            if is_waiting and not include_waiting:
+                continue
+            if (not is_waiting) and not include_service:
+                continue
+            if start is None or end is None or end <= start:
+                continue
+
+            prev = per_permit_first.get(base_label)
+            if prev is None or start < prev:
+                per_permit_first[base_label] = start
+
+        for stage_name, first_time in per_permit_first.items():
+            stage_first_times.setdefault(stage_name, []).append(first_time)
+            t_min = first_time if t_min is None else min(t_min, first_time)
+            t_max = first_time if t_max is None else max(t_max, first_time)
+
+    if t_min is None:
+        print("No stage timing data found for stage-over-time chart.")
+        return None, None
+
+    # Choose which stages to plot
+    all_stage_names = sorted(stage_first_times.keys())
+    if stages is None:
+        stages_to_plot = all_stage_names
+    else:
+        stages_to_plot = [s for s in stages if s in stage_first_times]
+        if not stages_to_plot:
+            print("None of the requested stages were found in the data.")
+            return None, None
+
+    # Sample times and count permits that have REACHED each stage (cumulative)
+    times = np.linspace(t_min, t_max, num_points)
+    counts = {stage: np.zeros_like(times, dtype=float) for stage in stages_to_plot}
+
+    for stage in stages_to_plot:
+        first_times = np.sort(np.array(stage_first_times.get(stage, []), dtype=float))
+        if first_times.size == 0:
+            continue
+        arr = counts[stage]
+        idx = 0
+        running = 0.0
+        for i, t in enumerate(times):
+            while idx < first_times.size and first_times[idx] <= t:
+                running += 1.0
+                idx += 1
+            arr[i] = running
+
+    # Convert to share of permits (0–100%) for cumulative recovery-style curves
+    total_permits = max(len(permits), 1)
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Convert simulation time (days) to rough months for readability
+    time_months = times / 30.0
+
+    for stage in stages_to_plot:
+        share_pct = counts[stage] / total_permits * 100.0
+        ax.plot(time_months, share_pct, linewidth=2, label=stage)
+
+    ax.set_xlabel("Months postdisaster (simulation time)", fontsize=12)
+    ax.set_ylabel("Share of permits in stage (%)", fontsize=12)
+    ax.set_title("Share of permits by stage over time", fontsize=14, fontweight="bold")
+    ax.set_ylim(0, 100)
+    ax.legend(loc="lower right")
+    ax.grid(axis="both", alpha=0.3)
+
+    plt.tight_layout()
+    return fig, ax
+
+    ax.set_xlabel("Process Step", fontsize=12)
+    ax.set_ylabel("Average Time (days)", fontsize=12)
+    ax.set_title(
+        "Average Total Waiting vs Service Time by Process Step",
+        fontsize=14,
+        fontweight="bold",
+    )
+    ax.set_xticks(x)
+    default_labels = {"Authorization": "Secure financing"}
+    merged_labels = {**default_labels, **(label_map or {})}
+    display_labels = [merged_labels.get(s, s) for s in steps]
+    ax.set_xticklabels(display_labels, rotation=45, ha="right")
+    ax.legend()
+    ax.grid(axis="y", alpha=0.3)
+
+    plt.tight_layout()
+    return fig, ax
+
+
+def visualize_all(permits: List[Permit], save_prefix: str = None, show: bool = True):
+    """
+    Create key visualizations and optionally save them.
+    
+    Currently includes:
+    - Total time from disaster to construction start by segment (box plot)
+    - Average total waiting vs service time by step
     """
     print(f"Creating visualizations for {len(permits)} permits...")
     
-    # 1. Stacked bar chart
-    print("  Creating stacked bar chart...")
-    fig1, _ = plot_stacked_bar_chart(permits, max_permits=50)
-    if save_prefix:
-        fig1.savefig(f"{save_prefix}_stacked_bar.png", dpi=300, bbox_inches='tight')
-        print(f"    Saved: {save_prefix}_stacked_bar.png")
-    
-    # 2. Gantt chart
-    print("  Creating Gantt chart...")
-    fig2, _ = plot_gantt_chart(permits, max_permits=30)
-    if save_prefix:
-        fig2.savefig(f"{save_prefix}_gantt.png", dpi=300, bbox_inches='tight')
-        print(f"    Saved: {save_prefix}_gantt.png")
-    
-    # 3. Average time by stage
-    print("  Creating average time by stage chart...")
-    fig3, _ = plot_average_time_by_stage(permits)
-    if save_prefix:
-        fig3.savefig(f"{save_prefix}_average_by_stage.png", dpi=300, bbox_inches='tight')
-        print(f"    Saved: {save_prefix}_average_by_stage.png")
-    
-    # 4. Time by segment (all segments)
-    print("  Creating time by segment chart...")
-    fig4, _ = plot_time_by_segment(permits)
-    if save_prefix:
-        fig4.savefig(f"{save_prefix}_by_segment.png", dpi=300, bbox_inches='tight')
-        print(f"    Saved: {save_prefix}_by_segment.png")
-    
-    # 5. Time by segment - Like-for-like only
-    print("  Creating time by segment chart (Like-for-like only)...")
-    fig5, _ = plot_time_by_segment_like_for_like(permits)
-    if save_prefix and fig5:
-        fig5.savefig(f"{save_prefix}_by_segment_like_for_like.png", dpi=300, bbox_inches='tight')
-        print(f"    Saved: {save_prefix}_by_segment_like_for_like.png")
-    
-    # 6. Time by segment - Non-like-for-like only
-    print("  Creating time by segment chart (Non-like-for-like only)...")
-    fig6, _ = plot_time_by_segment_non_like_for_like(permits)
-    if save_prefix and fig6:
-        fig6.savefig(f"{save_prefix}_by_segment_non_like_for_like.png", dpi=300, bbox_inches='tight')
-        print(f"    Saved: {save_prefix}_by_segment_non_like_for_like.png")
-    
-    # 5. Total time by segment (box plot)
+    # 1. Total time by segment (box plot)
     print("  Creating total time by segment chart (box plot)...")
-    fig5, _ = plot_total_time_by_segment(permits)
-    if save_prefix and fig5:
-        fig5.savefig(f"{save_prefix}_total_time_by_segment.png", dpi=300, bbox_inches='tight')
+    fig1, _ = plot_total_time_by_segment(permits)
+    if save_prefix and fig1:
+        fig1.savefig(f"{save_prefix}_total_time_by_segment.png", dpi=300, bbox_inches='tight')
         print(f"    Saved: {save_prefix}_total_time_by_segment.png")
+
+    # 2. Average total waiting vs service by step
+    print("  Creating waiting vs service by step chart...")
+    fig2, _ = plot_average_waiting_and_service_by_step(permits)
+    if save_prefix and fig2:
+        fig2.savefig(f"{save_prefix}_waiting_service_by_step.png", dpi=300, bbox_inches='tight')
+        print(f"    Saved: {save_prefix}_waiting_service_by_step.png")
     
-    plt.show()
+    if show:
+        plt.show()
     print("Visualizations complete!")
 
 

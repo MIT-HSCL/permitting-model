@@ -13,7 +13,12 @@ def run_simulation(
     simulation_duration: float = None,
     random_seed: int = 42,
     inter_arrival_time: float = 1.0,  # days between permit arrivals
-    sequential: bool = False
+    sequential: str = "standard",
+    ai_review: str = "none",
+    pct_pre_approved: float = 0.02,
+    pct_custom: float = 0.90,
+    pct_self_cert: float = 0.08,
+    pct_like_for_like: float = 0.80,
 ):
     """
     Run the permit simulation.
@@ -23,10 +28,22 @@ def run_simulation(
         simulation_duration: Maximum simulation time in days (if None, runs until all permits complete)
         random_seed: Random seed for reproducibility
         inter_arrival_time: Average time between permit arrivals (days)
-        sequential: If True, uses sequential processing; if False, uses parallel processing (default)
+        sequential: Processing mode: \"standard\", \"parallel\", or \"sequential\".
+        pct_pre_approved: Fraction of permits that are pre-approved plans (0–1).
+        pct_custom: Fraction of permits that are custom builds (0–1).
+        pct_self_cert: Fraction of permits that are self-certification (0–1).
+        pct_like_for_like: Fraction of permits that are like-for-like (0–1).
     """
     env = simpy.Environment()
-    sim = PermitSimulation(env, random_seed=random_seed)
+    sim = PermitSimulation(
+        env,
+        random_seed=random_seed,
+        ai_review=ai_review,
+        pct_pre_approved=pct_pre_approved,
+        pct_custom=pct_custom,
+        pct_self_cert=pct_self_cert,
+        pct_like_for_like=pct_like_for_like,
+    )
     
     def permit_generator():
         """Generate permits at specified intervals."""
@@ -41,10 +58,14 @@ def run_simulation(
             
             permit = sim.create_permit()
             # Use sequential or parallel processing based on parameter
-            if sequential:
+            if sequential == "standard":
+                env.process(sim.permit_process(permit))
+            elif sequential == "parallel":
+                env.process(sim.permit_process_parallel(permit))
+            elif sequential == "sequential":
                 env.process(sim.permit_process_sequential(permit))
             else:
-                env.process(sim.permit_process(permit))
+                raise ValueError(f"Invalid sequential processing type: {sequential}")
             count += 1
             
             # Exponential inter-arrival time
@@ -62,6 +83,89 @@ def run_simulation(
         env.run(until=max_time)
     
     return sim
+
+
+def run_multiple_simulations(
+    n_runs: int,
+    num_permits: int = 100,
+    simulation_duration: float | None = None,
+    base_seed: int = 42,
+    inter_arrival_time: float = 1.0,
+    scenario_params_list: list[dict] | None = None,
+    collect_permits: bool = False,
+):
+    """
+    Run the simulation many times, optionally for multiple scenarios.
+
+    Args:
+        n_runs: Number of repetitions per scenario.
+        num_permits: Number of permits per run (if simulation_duration is None).
+        simulation_duration: Max simulation time in days (optional).
+        base_seed: Base random seed; each run uses base_seed + run_index.
+        inter_arrival_time: Average time between permit arrivals (days).
+        scenario_params_list: List of dicts, each describing a scenario.
+            Each dict can contain:
+              - "name": scenario name (string, for labeling)
+              - any extra keyword args for run_simulation
+                (e.g. "sequential", "ai_review", pct_* parameters).
+        collect_permits: If True, also return completed permits for each run.
+
+    Example scenario list:
+        [
+            {"name": "standard_default", "sequential": "standard"},
+            {"name": "parallel_default", "sequential": "parallel"},
+            {
+                "name": "balanced_segments",
+                "sequential": "standard",
+                "pct_pre_approved": 0.5,
+                "pct_custom": 0.25,
+                "pct_self_cert": 0.25,
+                "pct_like_for_like": 0.8,
+            },
+        ]
+
+    Returns:
+        List of result dicts, each with:
+            {
+              "run_index": int,
+              "seed": int,
+              "scenario": str,
+              "params": dict,    # params passed into run_simulation
+              "stats": dict,     # sim.get_statistics() output
+              "permits": list,   # ONLY present if collect_permits=True;
+                                 # list of completed Permit objects for this run
+            }
+    """
+    if scenario_params_list is None:
+        scenario_params_list = [{"name": "default"}]
+
+    results: list[dict] = []
+    for run_index in range(n_runs):
+        seed = base_seed + run_index
+        for scenario in scenario_params_list:
+            scenario_name = scenario.get("name", f"scenario_{len(results)}")
+            params = {k: v for k, v in scenario.items() if k != "name"}
+
+            sim = run_simulation(
+                num_permits=num_permits,
+                simulation_duration=simulation_duration,
+                random_seed=seed,
+                inter_arrival_time=inter_arrival_time,
+                **params,
+            )
+            stats = sim.get_statistics()
+            entry: dict = {
+                "run_index": run_index,
+                "seed": seed,
+                "scenario": scenario_name,
+                "params": params,
+                "stats": stats,
+            }
+            if collect_permits:
+                entry["permits"] = list(sim.completed_permits)
+            results.append(entry)
+
+    return results
 
 
 def print_statistics(stats: dict):
@@ -104,96 +208,56 @@ def print_statistics(stats: dict):
         print(f"    Count:  {seg_stats['count']:4d}")
         print(f"    Mean:   {seg_stats['mean']:8.2f} days")
         print(f"    Median: {seg_stats['median']:8.2f} days")
+        if "min" in seg_stats and "max" in seg_stats:
+            print(f"    Min:    {seg_stats['min']:8.2f} days")
+            print(f"    Max:    {seg_stats['max']:8.2f} days")
     
+    if "total_waiting_time" in stats:
+        print("\n" + "-"*80)
+        print("TOTAL WAITING TIME (across all stages)")
+        print("-"*80)
+        tw = stats["total_waiting_time"]
+        print(f"  Mean:   {tw['mean']:8.2f} days")
+        print(f"  Median: {tw['median']:8.2f} days")
+        print(f"  Std Dev:{tw['std']:8.2f} days")
+        print(f"  Min:    {tw['min']:8.2f} days")
+        print(f"  Max:    {tw['max']:8.2f} days")
+
+    if "total_service_time" in stats:
+        print("\n" + "-"*80)
+        print("TOTAL SERVICE TIME (across all stages)")
+        print("-"*80)
+        ts = stats["total_service_time"]
+        print(f"  Mean:   {ts['mean']:8.2f} days")
+        print(f"  Median: {ts['median']:8.2f} days")
+        print(f"  Std Dev:{ts['std']:8.2f} days")
+        print(f"  Min:    {ts['min']:8.2f} days")
+        print(f"  Max:    {ts['max']:8.2f} days")
+
     print("\n" + "-"*80)
     print("PUBLIC WORKS RE-CHECK STATISTICS")
     print("-"*80)
-    if stats['public_works_rechecks']:
+    if stats.get('public_works_rechecks'):
         rc = stats['public_works_rechecks']
         print(f"  Average re-checks per permit: {rc['average']:.2f}")
         print(f"  Maximum re-checks: {rc['max']}")
         print(f"  Permits requiring re-checks: {rc['total_permits_with_rechecks']}")
+
+    if stats.get('applicant_revisions'):
+        print("\n" + "-"*80)
+        print("APPLICANT REVISIONS (when plan returned but not yet approved)")
+        print("-"*80)
+        ar = stats['applicant_revisions']
+        print(f"  Mean total revision time per permit: {ar['total_time_mean']:.2f} days")
+        print(f"  Median total revision time per permit: {ar['total_time_median']:.2f} days")
+        print(f"  Mean revision count per permit: {ar['revision_count_mean']:.2f}")
+        print(f"  Maximum revisions (any permit): {ar['revision_count_max']}")
+        print(f"  Permits with at least one revision: {ar['permits_with_revisions']}")
+        if stats.get('average_total_time') and stats['average_total_time'].get('mean', 0) > 0:
+            pct = 100.0 * ar['total_time_mean'] / stats['average_total_time']['mean']
+            print(f"  → Applicant revision time is {pct:.1f}% of mean total processing time (disaster to construction).")
     
     print("\n" + "="*80)
 
 
-def main():
-    """Main execution function."""
-    print("Starting Permit Simulation...")
-    print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # Simulation parameters
-    NUM_PERMITS = 100
-    RANDOM_SEED = 42
-    INTER_ARRIVAL_TIME = 1.0  # 1 day between arrivals
-    
-    sim = run_simulation(
-        num_permits=NUM_PERMITS,
-        random_seed=RANDOM_SEED,
-        inter_arrival_time=INTER_ARRIVAL_TIME
-    )
-    
-    # Get and print statistics
-    stats = sim.get_statistics()
-    print_statistics(stats)
-    
-    # Optionally save detailed results to JSON
-    # Set SAVE_RESULTS to True to automatically save, or False to skip
-    SAVE_RESULTS = False  # Change to True to auto-save results
-    
-    try:
-        save_results = input("\nSave detailed results to JSON? (y/n): ").lower().strip()
-    except (EOFError, KeyboardInterrupt):
-        # Non-interactive environment or user cancelled
-        save_results = 'n' if not SAVE_RESULTS else 'y'
-    
-    if save_results == 'y':
-        filename = f"simulation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        # Convert permits to serializable format
-        results = {
-            "simulation_parameters": {
-                "num_permits": NUM_PERMITS,
-                "random_seed": RANDOM_SEED,
-                "inter_arrival_time": INTER_ARRIVAL_TIME,
-            },
-            "statistics": stats,
-            "completed_permits": []
-        }
-        
-        for permit in sim.completed_permits:
-            permit_data = {
-                "permit_id": permit.permit_id,
-                "segment": permit.segment.name,
-                "created_at": permit.created_at,
-                "ready_for_construction": permit.ready_for_construction,
-                "total_time": permit.ready_for_construction - permit.created_at if permit.ready_for_construction else None,
-                "public_works_rechecks": permit.public_works_rechecks,
-                "timestamps": {
-                    "debris_removal_start": permit.debris_removal_request,
-                    "debris_removal_end": permit.debris_removal_end,
-                    "authorization_start": permit.authorization_request,
-                    "authorization_end": permit.authorization_end,
-                    "plan_prep_start": permit.plan_prep_request,
-                    "plan_prep_end": permit.plan_prep_end,
-                    "planning_start": permit.planning_request,
-                    "planning_end": permit.planning_end,
-                    "public_works_start": permit.public_works_request,
-                    "public_works_end": permit.public_works_end,
-                    "fire_review_start": permit.fire_review_request,
-                    "fire_review_end": permit.fire_review_end,
-                    "public_health_start": permit.public_health_request,
-                    "public_health_end": permit.public_health_end,
-                }
-            }
-            results["completed_permits"].append(permit_data)
-        
-        with open(filename, 'w') as f:
-            json.dump(results, f, indent=2)
-        
-        print(f"\nResults saved to: {filename}")
-
-
-if __name__ == "__main__":
-    main()
 
