@@ -212,6 +212,17 @@ def print_statistics(stats: dict):
             print(f"    Min:    {seg_stats['min']:8.2f} days")
             print(f"    Max:    {seg_stats['max']:8.2f} days")
     
+    if stats.get("county_review_vs_applicant"):
+        print("\n" + "-"*80)
+        print("COUNTY REVIEW VS. APPLICANT (mean days per permit, cumulative stage time)")
+        print("-"*80)
+        cv = stats["county_review_vs_applicant"]
+        print(f"  County review — mean: {cv['county_review_mean']:8.2f} d, median: {cv['county_review_median']:.2f} d")
+        print(f"  With applicant  — mean: {cv['applicant_mean']:8.2f} d, median: {cv['applicant_median']:.2f} d")
+        print(f"  Debris (EPA/USACE only, not in sums above) — mean: {cv['debris_mean']:.2f} d")
+        print("  Note: cumulative stage times; parallel reviews and unfinished debris in 'standard'")
+        print("  flow can make county+applicant+debris exceed wall-clock days to construction.")
+
     if "total_waiting_time" in stats:
         print("\n" + "-"*80)
         print("TOTAL WAITING TIME (across all stages)")
