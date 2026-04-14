@@ -182,6 +182,9 @@ class PermitSimulation:
         pct_custom: float = 0.90,
         pct_self_cert: float = 0.08,
         pct_like_for_like: float = 0.80,
+        review_duration_families: Optional[Dict[str, str]] = None,
+        review_duration_multipliers: Optional[Dict[str, float]] = None,
+        pre_application_distribution: str = "baseline",
 
     ):
         """
@@ -195,6 +198,18 @@ class PermitSimulation:
             pct_custom: Share of permits that are custom builds (0–1 fraction).
             pct_self_cert: Share of permits that are self-certification (0–1 fraction).
             pct_like_for_like: Share of permits that are like-for-like (0–1 fraction).
+            review_duration_families: Optional per-stage distribution family mapping for
+                'planning', 'public_works', and 'fire'. Supported families:
+                'normal', 'lognormal', 'triangular', 'uniform'.
+            review_duration_multipliers: Optional per-stage duration multipliers.
+                Supported keys include 'planning', 'public_works', 'fire',
+                'special_zoning', and 'agency_referral'.
+            pre_application_distribution: Distribution used for pre-application
+                activities. Supported values:
+                - 'baseline': existing segment-specific behavior
+                - 'lognormal_180': lognormal with median 180 days
+                - 'lognormal_60': lognormal with median 60 days
+                - 'poisson_10': Poisson with lambda 10 days
 
         Notes:
             - pct_pre_approved + pct_custom + pct_self_cert do not have to sum to 1.0
@@ -213,7 +228,26 @@ class PermitSimulation:
         self.pct_custom = pct_custom
         self.pct_self_cert = pct_self_cert
         self.pct_like_for_like = pct_like_for_like
-        
+
+        default_review_families = {
+            "planning": "normal",
+            "public_works": "normal",
+            "fire": "normal",
+        }
+        self.review_duration_families = dict(default_review_families)
+        if review_duration_families:
+            self.review_duration_families.update(review_duration_families)
+        self.review_duration_multipliers = {
+            "planning": 1.0,
+            "public_works": 1.0,
+            "fire": 1.0,
+            "special_zoning": 1.0,
+            "agency_referral": 1.0,
+        }
+        if review_duration_multipliers:
+            self.review_duration_multipliers.update(review_duration_multipliers)
+        self.pre_application_distribution = pre_application_distribution
+
         # Resource pools
         self.epa_debris_servers = simpy.Resource(env, capacity=160)
         self.usace_debris_servers = simpy.Resource(env, capacity=116)
@@ -273,6 +307,61 @@ class PermitSimulation:
         # Convert median to mu for lognormal
         mu = np.log(median)
         return max(0, np.random.lognormal(mu, sigma))
+
+    def _lognormal_from_mean_std(self, mean: float, std: float) -> tuple[float, float]:
+        """Convert real-space mean/std to numpy.lognormal(mu, sigma)."""
+        mean = max(mean, 1e-6)
+        std = max(std, 1e-6)
+        sigma2 = np.log(1.0 + (std ** 2) / (mean ** 2))
+        sigma = np.sqrt(sigma2)
+        mu = np.log(mean) - 0.5 * sigma2
+        return mu, sigma
+
+    def sample_duration_family(self, family: str, mean: float, std: float) -> float:
+        """Sample non-negative duration from a named family using mean/std scale."""
+        mean = max(mean, 1e-6)
+        std = max(std, 1e-6)
+        family = family.lower()
+
+        if family == "normal":
+            value = np.random.normal(mean, std)
+        elif family == "lognormal":
+            mu, sigma = self._lognormal_from_mean_std(mean, std)
+            value = np.random.lognormal(mu, sigma)
+        elif family == "triangular":
+            left = max(0.0, mean - 2.0 * std)
+            mode = mean
+            right = mean + 2.0 * std
+            value = np.random.triangular(left, mode, right)
+        elif family == "uniform":
+            low = max(0.0, mean - std)
+            high = mean + std
+            value = np.random.uniform(low, high)
+        else:
+            raise ValueError(f"Unsupported duration family: {family}")
+
+        return max(0.0, float(value))
+
+    def sample_stage_duration(self, stage: str, mean: float, std: float) -> float:
+        """Sample duration for a stage using configured family."""
+        family = self.review_duration_families.get(stage, "normal")
+        multiplier = self.review_duration_multipliers.get(stage, 1.0)
+        return self.sample_duration_family(family, mean * multiplier, std * multiplier)
+
+    def sample_pre_application_duration(self, permit: Permit) -> float:
+        """Sample pre-application duration using configured distribution choice."""
+        dist = self.pre_application_distribution
+        if dist == "baseline":
+            if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
+                return self.sample_lognormal(249, 0.53)
+            return max(0, lognorm.rvs(0.886, 0, 444))
+        if dist == "lognormal_180":
+            return self.sample_lognormal(180, 0.53)
+        if dist == "lognormal_60":
+            return self.sample_lognormal(60, 0.53)
+        if dist == "poisson_10":
+            return max(0.0, float(np.random.poisson(10)))
+        raise ValueError(f"Unsupported pre_application_distribution: {dist}")
     
     def sample_uniform_days(self) -> float:
         """Sample uniform: 2 or 3 days, each with 50% probability."""
@@ -315,12 +404,7 @@ class PermitSimulation:
         # Prepare & submit plans
         permit.plan_prep_start = self.env.now
 
-        # Segments 1 & 2 (pre-approved plan)
-        # Segments 3-6 (custom-builds)
-        if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
-            duration_days_plan = self.sample_lognormal(249, 0.53)
-        else:  # Segments 3-6
-            duration_days_plan = lognorm.rvs(0.886, 0, 444)
+        duration_days_plan = self.sample_pre_application_duration(permit)
 
         yield self.env.timeout(duration_days_plan)
         permit.plan_prep_end = self.env.now
@@ -356,16 +440,16 @@ class PermitSimulation:
 
             if is_initial:
                 if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
-                    duration_days = self.sample_normal(9, 1)
+                    duration_days = self.sample_stage_duration("planning", 9, 1)
                 else:  # like-for-like
-                   duration_days = self.sample_normal(5, 0.5)
+                   duration_days = self.sample_stage_duration("planning", 5, 0.5)
                 if self.ai_review == "initial_check":
                     duration_days = duration_days * 0.7
                 elif self.ai_review == "full_review":
                     duration_days = duration_days * 0.1
             else:
                 # Recheck uses shorter time
-                duration_days = self.sample_normal(1, 0.5)
+                duration_days = self.sample_stage_duration("planning", 1, 0.5)
                 if self.ai_review == "full_review":
                     duration_days = duration_days * 0.1
             
@@ -413,6 +497,7 @@ class PermitSimulation:
         permit.agency_referral_request = self.env.now
         permit.agency_referral_service_start = self.env.now
         duration_days = self.sample_lognormal(30, 0.7)
+        duration_days *= self.review_duration_multipliers.get("agency_referral", 1.0)
         yield self.env.timeout(duration_days)
         permit.agency_referral_end = self.env.now
 
@@ -432,6 +517,7 @@ class PermitSimulation:
         permit.zoning_start = self.env.now
         # Placeholder duration: lognormal with median 45 days, sigma 0.7
         duration_days = self.sample_lognormal(45, 0.7)
+        duration_days *= self.review_duration_multipliers.get("special_zoning", 1.0)
         yield self.env.timeout(duration_days)
         permit.zoning_end = self.env.now
     
@@ -464,9 +550,9 @@ class PermitSimulation:
                 permit.public_works_initial_waiting += (service_start_time - request_time)
             else:
                 permit.public_works_recheck_waiting += (service_start_time - request_time)
-            duration_days = self.sample_normal(8, 2)
-            duration_days_pre_approved = self.sample_normal(1, 0.5)
-            duration_days_recheck = self.sample_normal(1, 0.5)
+            duration_days = self.sample_stage_duration("public_works", 8, 2)
+            duration_days_pre_approved = self.sample_stage_duration("public_works", 1, 0.5)
+            duration_days_recheck = self.sample_stage_duration("public_works", 1, 0.5)
             if is_initial:
                 if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE, Segment.SELF_CERT_LIKE, Segment.SELF_CERT_NON_LIKE]:
                     if self.ai_review == "initial_check":
@@ -588,13 +674,13 @@ class PermitSimulation:
             if is_initial:
                 if random.random() < 0.70:
                     # Quick review: ~1 day (normal distribution around 1 day)
-                    duration_days = self.sample_normal(1, 0.2)
+                    duration_days = self.sample_stage_duration("fire", 1, 0.2)
                 else:
                     # Detailed review: ~13 days (normal distribution around 13 days)
-                    duration_days = self.sample_normal(8, 2)
+                    duration_days = self.sample_stage_duration("fire", 8, 2)
             else:
                 # Recheck uses shorter time
-                duration_days = self.sample_normal(2, 0.5)
+                duration_days = self.sample_stage_duration("fire", 2, 0.5)
             yield self.env.timeout(duration_days)
 
             # Mark end of active review time and notify revisions if no reviews remain
