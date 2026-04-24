@@ -6,6 +6,7 @@ Using SimPy to model the workflow from fire event to construction readiness.
 import simpy
 import random
 import numpy as np
+import heapq
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional
@@ -21,6 +22,50 @@ class Segment(Enum):
     CUSTOM_NON_LIKE = 4  # Custom build, Non-like-for-like
     SELF_CERT_LIKE = 5  # Custom build w/ self-certification, Like-for-like
     SELF_CERT_NON_LIKE = 6  # Custom build w/ self-certification, Non-like-for-like
+
+
+class StaffCaseloadPool:
+    """Priority-aware pool of staff with per-person concurrent caseload caps."""
+
+    def __init__(self, env: simpy.Environment, staff_count: int, caseload_per_staff: int):
+        self.env = env
+        self.staff_count = max(1, int(staff_count))
+        self.caseload_per_staff = max(1, int(caseload_per_staff))
+        self._loads = [0] * self.staff_count
+        self._waiters: list[tuple[int, int, simpy.Event]] = []
+        self._seq = 0
+
+    def _next_available_staff(self) -> Optional[int]:
+        available = [idx for idx, load in enumerate(self._loads) if load < self.caseload_per_staff]
+        if not available:
+            return None
+        return min(available, key=lambda idx: (self._loads[idx], idx))
+
+    def request(self, priority: int = 1, preferred_staff_id: Optional[int] = None):
+        """Yield a staff id once a staff member has available caseload."""
+        while True:
+            if preferred_staff_id is not None:
+                if 0 <= preferred_staff_id < self.staff_count and self._loads[preferred_staff_id] < self.caseload_per_staff:
+                    staff_id = preferred_staff_id
+                else:
+                    staff_id = None
+            else:
+                staff_id = self._next_available_staff()
+            if staff_id is not None:
+                self._loads[staff_id] += 1
+                return staff_id
+
+            evt = self.env.event()
+            heapq.heappush(self._waiters, (priority, self._seq, evt))
+            self._seq += 1
+            yield evt
+
+    def release(self, staff_id: int):
+        self._loads[staff_id] = max(0, self._loads[staff_id] - 1)
+        if self._waiters:
+            _, _, evt = heapq.heappop(self._waiters)
+            if not evt.triggered:
+                evt.succeed()
 
 
 @dataclass
@@ -59,6 +104,7 @@ class Permit:
     planning_initial_service: float = 0.0
     planning_recheck_waiting: float = 0.0
     planning_recheck_service: float = 0.0
+    planning_reviewer_staff_id: Optional[int] = None
     # Public Works
     public_works_request: Optional[float] = None
     public_works_service_start: Optional[float] = None  # First service start (for waiting time calculation)
@@ -69,6 +115,7 @@ class Permit:
     public_works_initial_service: float = 0.0
     public_works_recheck_waiting: float = 0.0
     public_works_recheck_service: float = 0.0
+    public_works_reviewer_staff_id: Optional[int] = None
     # Fire review
     fire_review_request: Optional[float] = None
     fire_review_service_start: Optional[float] = None
@@ -79,6 +126,7 @@ class Permit:
     fire_initial_service: float = 0.0
     fire_recheck_waiting: float = 0.0
     fire_recheck_service: float = 0.0
+    fire_reviewer_staff_id: Optional[int] = None
     # Applicant revisions (when plan is returned but not yet approved); N(30, 10) days per occurrence
     applicant_revisions_total_time: float = 0.0
     applicant_revision_count: int = 0
@@ -185,6 +233,12 @@ class PermitSimulation:
         review_duration_families: Optional[Dict[str, str]] = None,
         review_duration_multipliers: Optional[Dict[str, float]] = None,
         pre_application_distribution: str = "baseline",
+        planning_staff_count: int = 20,
+        planning_caseload_per_staff: float = 7.5,
+        public_works_staff_count: int = 40,
+        public_works_caseload_per_staff: float = 7.5,
+        fire_staff_count: int = 100,
+        fire_caseload_per_staff: float = 1.0,
 
     ):
         """
@@ -210,6 +264,13 @@ class PermitSimulation:
                 - 'lognormal_180': lognormal with median 180 days
                 - 'lognormal_60': lognormal with median 60 days
                 - 'poisson_10': Poisson with lambda 10 days
+            planning_staff_count: Number of planning staff.
+            planning_caseload_per_staff: Average concurrent planning caseload per staff.
+            public_works_staff_count: Number of public works staff.
+            public_works_caseload_per_staff: Average concurrent public works
+                caseload per staff.
+            fire_staff_count: Number of fire review staff.
+            fire_caseload_per_staff: Average concurrent fire caseload per staff.
 
         Notes:
             - pct_pre_approved + pct_custom + pct_self_cert do not have to sum to 1.0
@@ -247,13 +308,31 @@ class PermitSimulation:
         if review_duration_multipliers:
             self.review_duration_multipliers.update(review_duration_multipliers)
         self.pre_application_distribution = pre_application_distribution
+        self.planning_staff_count = max(1, int(round(planning_staff_count)))
+        self.public_works_staff_count = max(1, int(round(public_works_staff_count)))
+        self.fire_staff_count = max(1, int(round(fire_staff_count)))
+        self.planning_caseload_per_staff = max(0.0, float(planning_caseload_per_staff))
+        self.public_works_caseload_per_staff = max(0.0, float(public_works_caseload_per_staff))
+        self.fire_caseload_per_staff = max(0.0, float(fire_caseload_per_staff))
+        self.planning_staff_pool = StaffCaseloadPool(
+            env=env,
+            staff_count=self.planning_staff_count,
+            caseload_per_staff=max(1, int(round(self.planning_caseload_per_staff))),
+        )
+        self.public_works_staff_pool = StaffCaseloadPool(
+            env=env,
+            staff_count=self.public_works_staff_count,
+            caseload_per_staff=max(1, int(round(self.public_works_caseload_per_staff))),
+        )
+        self.fire_staff_pool = StaffCaseloadPool(
+            env=env,
+            staff_count=self.fire_staff_count,
+            caseload_per_staff=max(1, int(round(self.fire_caseload_per_staff))),
+        )
 
         # Resource pools
         self.epa_debris_servers = simpy.Resource(env, capacity=160)
         self.usace_debris_servers = simpy.Resource(env, capacity=116)
-        self.planning_servers = simpy.PriorityResource(env, capacity=150)  # 20 servers × 7.5 permits each
-        self.public_works_servers = simpy.PriorityResource(env, capacity=300) # 40 servers x 7.5 permits each
-        self.fire_servers = simpy.PriorityResource(env, capacity=100)
         
         # Statistics
         self.completed_permits: List[Permit] = []
@@ -361,6 +440,8 @@ class PermitSimulation:
             return self.sample_lognormal(60, 0.53)
         if dist == "poisson_10":
             return max(0.0, float(np.random.poisson(10)))
+        if dist == "lognormal_10":
+            return self.sample_lognormal(10, 0.53)
         raise ValueError(f"Unsupported pre_application_distribution: {dist}")
     
     def sample_uniform_days(self) -> float:
@@ -423,8 +504,18 @@ class PermitSimulation:
         request_time = self.env.now
 
         priority = 1 if permit.planning_rechecks == 0 else 0
-        with self.planning_servers.request(priority=priority) as request:
-            yield request
+        planning_staff_id: Optional[int] = None
+        try:
+            preferred_staff_id = permit.planning_reviewer_staff_id if not is_initial else None
+            planning_staff_id = yield self.env.process(
+                self.planning_staff_pool.request(
+                    priority=priority,
+                    preferred_staff_id=preferred_staff_id,
+                )
+            )
+            if is_initial and permit.planning_reviewer_staff_id is None:
+                permit.planning_reviewer_staff_id = planning_staff_id
+
             service_start_time = self.env.now
             if is_initial:
                 permit.planning_service_start = service_start_time
@@ -433,8 +524,6 @@ class PermitSimulation:
                 permit.planning_initial_waiting += (service_start_time - request_time)
             else:
                 permit.planning_recheck_waiting += (service_start_time - request_time)
-            # Segments 2 & 4 (non-like-for-like) - N(9, 2) days
-            # Segments 1 & 3 (like-for-like) - N(3, 1) days
             # Mark review service as active (for revision overlap control)
             self._active_reviews[permit.permit_id] = self._active_reviews.get(permit.permit_id, 0) + 1
 
@@ -442,7 +531,7 @@ class PermitSimulation:
                 if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
                     duration_days = self.sample_stage_duration("planning", 9, 1)
                 else:  # like-for-like
-                   duration_days = self.sample_stage_duration("planning", 5, 0.5)
+                    duration_days = self.sample_stage_duration("planning", 5, 0.5)
                 if self.ai_review == "initial_check":
                     duration_days = duration_days * 0.7
                 elif self.ai_review == "full_review":
@@ -452,24 +541,26 @@ class PermitSimulation:
                 duration_days = self.sample_stage_duration("planning", 1, 0.5)
                 if self.ai_review == "full_review":
                     duration_days = duration_days * 0.1
-            
-            yield self.env.timeout(duration_days)
 
-            # Review service finished; update active count and possibly notify
-            # waiting applicant revisions that no reviews are active.
-            pid = permit.permit_id
-            self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
-            if self._active_reviews[pid] <= 0:
-                self._active_reviews[pid] = 0
-                no_evt = self._no_active_events.get(pid)
-                if no_evt is not None and not no_evt.triggered:
-                    no_evt.succeed()
+            yield self.env.timeout(duration_days)
 
             service_end_time = self.env.now
             if is_initial:
                 permit.planning_initial_service += (service_end_time - service_start_time)
             else:
                 permit.planning_recheck_service += (service_end_time - service_start_time)
+        finally:
+            if planning_staff_id is not None and planning_staff_id >= 0:
+                self.planning_staff_pool.release(planning_staff_id)
+
+            pid = permit.permit_id
+            if self._active_reviews.get(pid, 0) > 0:
+                self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
+            if self._active_reviews.get(pid, 0) <= 0:
+                self._active_reviews[pid] = 0
+                no_evt = self._no_active_events.get(pid)
+                if no_evt is not None and not no_evt.triggered:
+                    no_evt.succeed()
         
         if permit.planning_rechecks == 0:
             # 10% approved, 90% need re-check
@@ -537,8 +628,18 @@ class PermitSimulation:
         request_time = self.env.now
 
         priority = 1 if permit.public_works_rechecks == 0 else 0
-        with self.public_works_servers.request(priority=priority) as request:
-            yield request
+        public_works_staff_id: Optional[int] = None
+        try:
+            preferred_staff_id = permit.public_works_reviewer_staff_id if not is_initial else None
+            public_works_staff_id = yield self.env.process(
+                self.public_works_staff_pool.request(
+                    priority=priority,
+                    preferred_staff_id=preferred_staff_id,
+                )
+            )
+            if is_initial and permit.public_works_reviewer_staff_id is None:
+                permit.public_works_reviewer_staff_id = public_works_staff_id
+
             service_start_time = self.env.now
             # Mark review service as active for overlap control
             self._active_reviews[permit.permit_id] = self._active_reviews.get(permit.permit_id, 0) + 1
@@ -571,19 +672,23 @@ class PermitSimulation:
                     duration_days_recheck = duration_days_recheck * 0.1
                 yield self.env.timeout(duration_days_recheck)
 
-            # Mark end of active review time and notify revisions if no reviews remain
-            pid = permit.permit_id
-            self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
-            if self._active_reviews[pid] <= 0:
-                self._active_reviews[pid] = 0
-                no_evt = self._no_active_events.get(pid)
-                if no_evt is not None and not no_evt.triggered:
-                    no_evt.succeed()
             service_end_time = self.env.now
             if is_initial:
                 permit.public_works_initial_service += (service_end_time - service_start_time)
             else:
                 permit.public_works_recheck_service += (service_end_time - service_start_time)
+        finally:
+            if public_works_staff_id is not None and public_works_staff_id >= 0:
+                self.public_works_staff_pool.release(public_works_staff_id)
+
+            pid = permit.permit_id
+            if self._active_reviews.get(pid, 0) > 0:
+                self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
+            if self._active_reviews.get(pid, 0) <= 0:
+                self._active_reviews[pid] = 0
+                no_evt = self._no_active_events.get(pid)
+                if no_evt is not None and not no_evt.triggered:
+                    no_evt.succeed()
 
         if permit.public_works_rechecks == 0:
             # 10% approved, 90% need re-check
@@ -657,8 +762,18 @@ class PermitSimulation:
         request_time = self.env.now
 
         priority = 1 if permit.fire_rechecks == 0 else 0
-        with self.fire_servers.request(priority=priority) as request:
-            yield request
+        fire_staff_id: Optional[int] = None
+        try:
+            preferred_staff_id = permit.fire_reviewer_staff_id if not is_initial else None
+            fire_staff_id = yield self.env.process(
+                self.fire_staff_pool.request(
+                    priority=priority,
+                    preferred_staff_id=preferred_staff_id,
+                )
+            )
+            if is_initial and permit.fire_reviewer_staff_id is None:
+                permit.fire_reviewer_staff_id = fire_staff_id
+
             service_start_time = self.env.now
             # Mark review service as active
             self._active_reviews[permit.permit_id] = self._active_reviews.get(permit.permit_id, 0) + 1
@@ -683,19 +798,24 @@ class PermitSimulation:
                 duration_days = self.sample_stage_duration("fire", 2, 0.5)
             yield self.env.timeout(duration_days)
 
-            # Mark end of active review time and notify revisions if no reviews remain
-            pid = permit.permit_id
-            self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
-            if self._active_reviews[pid] <= 0:
-                self._active_reviews[pid] = 0
-                no_evt = self._no_active_events.get(pid)
-                if no_evt is not None and not no_evt.triggered:
-                    no_evt.succeed()
             service_end_time = self.env.now
             if is_initial:
                 permit.fire_initial_service += (service_end_time - service_start_time)
             else:
                 permit.fire_recheck_service += (service_end_time - service_start_time)
+        finally:
+            if fire_staff_id is not None and fire_staff_id >= 0:
+                self.fire_staff_pool.release(fire_staff_id)
+
+            # Mark end of active review time and notify revisions if no reviews remain
+            pid = permit.permit_id
+            if self._active_reviews.get(pid, 0) > 0:
+                self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
+            if self._active_reviews.get(pid, 0) <= 0:
+                self._active_reviews[pid] = 0
+                no_evt = self._no_active_events.get(pid)
+                if no_evt is not None and not no_evt.triggered:
+                    no_evt.succeed()
         
         if permit.fire_rechecks == 0:
             # 25% approved, 75% need re-check
