@@ -22,6 +22,12 @@ def run_simulation(
     review_duration_families: dict[str, str] | None = None,
     review_duration_multipliers: dict[str, float] | None = None,
     pre_application_distribution: str = "baseline",
+    planning_staff_count: int = 25,
+    planning_caseload_per_staff: float = 7,
+    public_works_staff_count: int = 35,
+    public_works_caseload_per_staff: float = 7,
+    fire_staff_count: int = 10,
+    fire_caseload_per_staff: float = 7,
 ):
     """
     Run the permit simulation.
@@ -42,6 +48,13 @@ def run_simulation(
             Keys can include planning/public_works/fire/special_zoning/agency_referral.
         pre_application_distribution: Distribution choice for pre-application duration.
             Supported values: baseline, lognormal_180, lognormal_60, poisson_10.
+        planning_staff_count: Planning staff headcount.
+        planning_caseload_per_staff: Average concurrent planning caseload per staff.
+        public_works_staff_count: Public works staff headcount.
+        public_works_caseload_per_staff: Average concurrent public works caseload per
+            staff.
+        fire_staff_count: Fire review staff headcount.
+        fire_caseload_per_staff: Average concurrent fire caseload per staff.
     """
     env = simpy.Environment()
     sim = PermitSimulation(
@@ -55,6 +68,12 @@ def run_simulation(
         review_duration_families=review_duration_families,
         review_duration_multipliers=review_duration_multipliers,
         pre_application_distribution=pre_application_distribution,
+        planning_staff_count=planning_staff_count,
+        planning_caseload_per_staff=planning_caseload_per_staff,
+        public_works_staff_count=public_works_staff_count,
+        public_works_caseload_per_staff=public_works_caseload_per_staff,
+        fire_staff_count=fire_staff_count,
+        fire_caseload_per_staff=fire_caseload_per_staff,
     )
     
     def permit_generator():

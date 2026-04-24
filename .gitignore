@@ -40,3 +40,4 @@ Thumbs.db
 # Simulation results
 simulation_results_*.json
 
+Results/
