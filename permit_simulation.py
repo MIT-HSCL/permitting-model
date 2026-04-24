@@ -8,8 +8,9 @@ import random
 import numpy as np
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 import statistics
+from scipy.stats import lognorm
 
 
 class Segment(Enum):
@@ -78,26 +79,95 @@ class Permit:
     fire_initial_service: float = 0.0
     fire_recheck_waiting: float = 0.0
     fire_recheck_service: float = 0.0
-    # Public Health review
-    public_health_request: Optional[float] = None
-    public_health_service_start: Optional[float] = None
-    public_health_end: Optional[float] = None
-    public_health_total_waiting: float = 0.0  # Cumulative waiting time across all rereviews
-    public_health_rechecks: int = 0
-    public_health_initial_waiting: float = 0.0
-    public_health_initial_service: float = 0.0
-    public_health_recheck_waiting: float = 0.0
-    public_health_recheck_service: float = 0.0
     # Applicant revisions (when plan is returned but not yet approved); N(30, 10) days per occurrence
     applicant_revisions_total_time: float = 0.0
     applicant_revision_count: int = 0
     applicant_revision_intervals: List[tuple] = field(default_factory=list)
-    # Agency Referrals permits
-    misc_request: Optional[float] = None
-    misc_service_start: Optional[float] = None
-    misc_end: Optional[float] = None
+    # Agency referral permits
+    agency_referral_request: Optional[float] = None
+    agency_referral_service_start: Optional[float] = None
+    agency_referral_end: Optional[float] = None
+    # Special zoning review (service only, no explicit waiting)
+    zoning_start: Optional[float] = None
+    zoning_end: Optional[float] = None
     # Final
     ready_for_construction: Optional[float] = None
+
+
+def epa_debris_calendar_metrics(permits: Iterable[Permit]) -> Dict[str, Optional[float]]:
+    """
+    Across permits: earliest EPA service start, latest EPA end, and wall-clock span
+    (last end minus first start; overlaps allowed). Uses the same time units as the simulation.
+    """
+    starts = [p.epa_debris_service_start for p in permits if p.epa_debris_service_start is not None]
+    ends = [p.epa_debris_end for p in permits if p.epa_debris_end is not None]
+    if not starts or not ends:
+        return {
+            "first_service_start": None,
+            "last_service_end": None,
+            "calendar_span_first_start_to_last_end": None,
+        }
+    first = min(starts)
+    last = max(ends)
+    return {
+        "first_service_start": first,
+        "last_service_end": last,
+        "calendar_span_first_start_to_last_end": last - first,
+    }
+
+
+def _permit_county_review_days(p: Permit) -> float:
+    """Cumulative days in county-led review queues + review service (planning, PW, fire, zoning, agency referral)."""
+    t = (
+        p.planning_total_waiting
+        + p.planning_initial_service
+        + p.planning_recheck_service
+        + p.public_works_total_waiting
+        + p.public_works_initial_service
+        + p.public_works_recheck_service
+        + p.fire_review_total_waiting
+        + p.fire_initial_service
+        + p.fire_recheck_service
+    )
+    if p.zoning_end is not None and p.zoning_start is not None:
+        t += p.zoning_end - p.zoning_start
+    if p.agency_referral_request is not None and p.agency_referral_service_start is not None:
+        t += p.agency_referral_service_start - p.agency_referral_request
+    if p.agency_referral_end is not None and p.agency_referral_service_start is not None:
+        t += p.agency_referral_end - p.agency_referral_service_start
+    return t
+
+
+def _permit_applicant_days(p: Permit) -> float:
+    """Cumulative days in pre-application (authorization + plan prep) and applicant revision work."""
+    t = p.applicant_revisions_total_time
+    if p.authorization_end is not None and p.authorization_start is not None:
+        t += p.authorization_end - p.authorization_start
+    if p.plan_prep_end is not None and p.plan_prep_start is not None:
+        t += p.plan_prep_end - p.plan_prep_start
+    return t
+
+
+def usace_debris_calendar_metrics(permits: Iterable[Permit]) -> Dict[str, Optional[float]]:
+    """
+    Across permits: earliest USACE service start, latest USACE end, and wall-clock span
+    (last end minus first start; overlaps allowed). Same time units as the simulation.
+    """
+    starts = [p.usace_debris_service_start for p in permits if p.usace_debris_service_start is not None]
+    ends = [p.usace_debris_end for p in permits if p.usace_debris_end is not None]
+    if not starts or not ends:
+        return {
+            "first_service_start": None,
+            "last_service_end": None,
+            "calendar_span_first_start_to_last_end": None,
+        }
+    first = min(starts)
+    last = max(ends)
+    return {
+        "first_service_start": first,
+        "last_service_end": last,
+        "calendar_span_first_start_to_last_end": last - first,
+    }
 
 
 class PermitSimulation:
@@ -112,6 +182,9 @@ class PermitSimulation:
         pct_custom: float = 0.90,
         pct_self_cert: float = 0.08,
         pct_like_for_like: float = 0.80,
+        review_duration_families: Optional[Dict[str, str]] = None,
+        review_duration_multipliers: Optional[Dict[str, float]] = None,
+        pre_application_distribution: str = "baseline",
 
     ):
         """
@@ -125,6 +198,18 @@ class PermitSimulation:
             pct_custom: Share of permits that are custom builds (0–1 fraction).
             pct_self_cert: Share of permits that are self-certification (0–1 fraction).
             pct_like_for_like: Share of permits that are like-for-like (0–1 fraction).
+            review_duration_families: Optional per-stage distribution family mapping for
+                'planning', 'public_works', and 'fire'. Supported families:
+                'normal', 'lognormal', 'triangular', 'uniform'.
+            review_duration_multipliers: Optional per-stage duration multipliers.
+                Supported keys include 'planning', 'public_works', 'fire',
+                'special_zoning', and 'agency_referral'.
+            pre_application_distribution: Distribution used for pre-application
+                activities. Supported values:
+                - 'baseline': existing segment-specific behavior
+                - 'lognormal_180': lognormal with median 180 days
+                - 'lognormal_60': lognormal with median 60 days
+                - 'poisson_10': Poisson with lambda 10 days
 
         Notes:
             - pct_pre_approved + pct_custom + pct_self_cert do not have to sum to 1.0
@@ -143,14 +228,32 @@ class PermitSimulation:
         self.pct_custom = pct_custom
         self.pct_self_cert = pct_self_cert
         self.pct_like_for_like = pct_like_for_like
-        
+
+        default_review_families = {
+            "planning": "normal",
+            "public_works": "normal",
+            "fire": "normal",
+        }
+        self.review_duration_families = dict(default_review_families)
+        if review_duration_families:
+            self.review_duration_families.update(review_duration_families)
+        self.review_duration_multipliers = {
+            "planning": 1.0,
+            "public_works": 1.0,
+            "fire": 1.0,
+            "special_zoning": 1.0,
+            "agency_referral": 1.0,
+        }
+        if review_duration_multipliers:
+            self.review_duration_multipliers.update(review_duration_multipliers)
+        self.pre_application_distribution = pre_application_distribution
+
         # Resource pools
         self.epa_debris_servers = simpy.Resource(env, capacity=160)
         self.usace_debris_servers = simpy.Resource(env, capacity=116)
         self.planning_servers = simpy.PriorityResource(env, capacity=150)  # 20 servers × 7.5 permits each
         self.public_works_servers = simpy.PriorityResource(env, capacity=300) # 40 servers x 7.5 permits each
         self.fire_servers = simpy.PriorityResource(env, capacity=100)
-        self.public_health_servers = simpy.PriorityResource(env, capacity=25)
         
         # Statistics
         self.completed_permits: List[Permit] = []
@@ -204,6 +307,61 @@ class PermitSimulation:
         # Convert median to mu for lognormal
         mu = np.log(median)
         return max(0, np.random.lognormal(mu, sigma))
+
+    def _lognormal_from_mean_std(self, mean: float, std: float) -> tuple[float, float]:
+        """Convert real-space mean/std to numpy.lognormal(mu, sigma)."""
+        mean = max(mean, 1e-6)
+        std = max(std, 1e-6)
+        sigma2 = np.log(1.0 + (std ** 2) / (mean ** 2))
+        sigma = np.sqrt(sigma2)
+        mu = np.log(mean) - 0.5 * sigma2
+        return mu, sigma
+
+    def sample_duration_family(self, family: str, mean: float, std: float) -> float:
+        """Sample non-negative duration from a named family using mean/std scale."""
+        mean = max(mean, 1e-6)
+        std = max(std, 1e-6)
+        family = family.lower()
+
+        if family == "normal":
+            value = np.random.normal(mean, std)
+        elif family == "lognormal":
+            mu, sigma = self._lognormal_from_mean_std(mean, std)
+            value = np.random.lognormal(mu, sigma)
+        elif family == "triangular":
+            left = max(0.0, mean - 2.0 * std)
+            mode = mean
+            right = mean + 2.0 * std
+            value = np.random.triangular(left, mode, right)
+        elif family == "uniform":
+            low = max(0.0, mean - std)
+            high = mean + std
+            value = np.random.uniform(low, high)
+        else:
+            raise ValueError(f"Unsupported duration family: {family}")
+
+        return max(0.0, float(value))
+
+    def sample_stage_duration(self, stage: str, mean: float, std: float) -> float:
+        """Sample duration for a stage using configured family."""
+        family = self.review_duration_families.get(stage, "normal")
+        multiplier = self.review_duration_multipliers.get(stage, 1.0)
+        return self.sample_duration_family(family, mean * multiplier, std * multiplier)
+
+    def sample_pre_application_duration(self, permit: Permit) -> float:
+        """Sample pre-application duration using configured distribution choice."""
+        dist = self.pre_application_distribution
+        if dist == "baseline":
+            if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
+                return self.sample_lognormal(249, 0.53)
+            return max(0, lognorm.rvs(0.886, 0, 444))
+        if dist == "lognormal_180":
+            return self.sample_lognormal(180, 0.53)
+        if dist == "lognormal_60":
+            return self.sample_lognormal(60, 0.53)
+        if dist == "poisson_10":
+            return max(0.0, float(np.random.poisson(10)))
+        raise ValueError(f"Unsupported pre_application_distribution: {dist}")
     
     def sample_uniform_days(self) -> float:
         """Sample uniform: 2 or 3 days, each with 50% probability."""
@@ -220,7 +378,7 @@ class PermitSimulation:
             permit.epa_debris_service_start = self.env.now
             permit.epa_debris_total_waiting += (permit.epa_debris_service_start - request_time)
             # Uniform: 2 or 3 days, each with 50% probability
-            duration = self.sample_uniform_days()
+            duration = self.sample_normal(1, 0.5)
             yield self.env.timeout(duration)
         permit.epa_debris_end = self.env.now
         # Note: debris_removal_end will be set after USACE completes
@@ -241,26 +399,14 @@ class PermitSimulation:
         # Set end time after both EPA and USACE phases complete
         permit.debris_removal_end = self.env.now
     
-    def securing_authorization(self, permit: Permit):
-        """Securing authorization & funding to rebuild."""
-        permit.authorization_start = self.env.now
-        # N(42, 20) days
-        duration_days = self.sample_normal(0, 0)
-        yield self.env.timeout(duration_days)
-        permit.authorization_end = self.env.now
-    
-    def prepare_submit_plans(self, permit: Permit):
-        """Prepare & submit plans."""
+    def pre_application_activities(self, permit: Permit):
+        "Encompasses all pre-application activities, including preparing/submitting plans, securing financing, etc"
+        # Prepare & submit plans
         permit.plan_prep_start = self.env.now
-        
-        # Segments 1 & 2 (pre-approved plan) → N(10, 2) days
-        # Segments 3-6 (custom-builds) → lognormal dist with median 150 and sigma = 0.6 days
-        if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
-            duration_days = self.sample_lognormal(249, 0.53)
-        else:  # Segments 3-6
-            duration_days = lognorm.rvs(0.5246014736524087, 0, 432.70852353179737)
-        
-        yield self.env.timeout(duration_days)
+
+        duration_days_plan = self.sample_pre_application_duration(permit)
+
+        yield self.env.timeout(duration_days_plan)
         permit.plan_prep_end = self.env.now
     
     def planning_department(self, permit: Permit):
@@ -294,16 +440,16 @@ class PermitSimulation:
 
             if is_initial:
                 if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
-                    duration_days = self.sample_normal(5, 1)
+                    duration_days = self.sample_stage_duration("planning", 9, 1)
                 else:  # like-for-like
-                   duration_days = self.sample_normal(2, 0.5)
+                   duration_days = self.sample_stage_duration("planning", 5, 0.5)
                 if self.ai_review == "initial_check":
                     duration_days = duration_days * 0.7
                 elif self.ai_review == "full_review":
                     duration_days = duration_days * 0.1
             else:
                 # Recheck uses shorter time
-                duration_days = self.sample_normal(1, 0.5)
+                duration_days = self.sample_stage_duration("planning", 1, 0.5)
                 if self.ai_review == "full_review":
                     duration_days = duration_days * 0.1
             
@@ -340,18 +486,40 @@ class PermitSimulation:
 
         return approved
 
-    def misc_permits(self, permit: Permit):
-        """Agency Referrals permits administered by various other departments.
+    def agency_referral(self, permit: Permit):
+        """Agency referral permits administered by various other departments.
         Segments 1, 3, and 5 (like-for-like) skip this step entirely.
         """
         if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.CUSTOM_LIKE, Segment.SELF_CERT_LIKE]:
-            # Skip agency referrals if like-for-like
+            # Skip agency referral if like-for-like
             return
         
-        permit.misc_request = self.env.now
+        permit.agency_referral_request = self.env.now
+        permit.agency_referral_service_start = self.env.now
         duration_days = self.sample_lognormal(30, 0.7)
+        duration_days *= self.review_duration_multipliers.get("agency_referral", 1.0)
         yield self.env.timeout(duration_days)
-        permit.misc_end = self.env.now
+        permit.agency_referral_end = self.env.now
+
+    def special_zoning_review(self, permit: Permit):
+        """Special zoning review step for permits that require additional zoning checks.
+
+        Currently applies only to non-like-for-like segments (2, 4, 6) and is modeled
+        as a single service interval with no queueing.
+        """
+        if permit.segment not in [
+            Segment.PRE_APPROVED_NON_LIKE,
+            Segment.CUSTOM_NON_LIKE,
+            Segment.SELF_CERT_NON_LIKE,
+        ]:
+            return
+
+        permit.zoning_start = self.env.now
+        # Placeholder duration: lognormal with median 45 days, sigma 0.7
+        duration_days = self.sample_lognormal(45, 0.7)
+        duration_days *= self.review_duration_multipliers.get("special_zoning", 1.0)
+        yield self.env.timeout(duration_days)
+        permit.zoning_end = self.env.now
     
     def public_works(self, permit: Permit):
         """Public works (Building & Safety) Initial Check.
@@ -382,9 +550,9 @@ class PermitSimulation:
                 permit.public_works_initial_waiting += (service_start_time - request_time)
             else:
                 permit.public_works_recheck_waiting += (service_start_time - request_time)
-            duration_days = self.sample_normal(8, 2)
-            duration_days_pre_approved = self.sample_normal(1, 0.5)
-            duration_days_recheck = self.sample_normal(1, 0.5)
+            duration_days = self.sample_stage_duration("public_works", 8, 2)
+            duration_days_pre_approved = self.sample_stage_duration("public_works", 1, 0.5)
+            duration_days_recheck = self.sample_stage_duration("public_works", 1, 0.5)
             if is_initial:
                 if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE, Segment.SELF_CERT_LIKE, Segment.SELF_CERT_NON_LIKE]:
                     if self.ai_review == "initial_check":
@@ -433,12 +601,30 @@ class PermitSimulation:
         return approved
 
     def public_works_until_approved(self, permit: Permit):
-        """Loop public works until approved (used for parallel flow)."""
+        """Loop public works until approved (used for parallel flow).
+
+        Agency referral (non-like segments) is not inside the PW server block. It starts
+        after the first failed PW attempt so it runs in parallel with applicant revisions
+        and PW rechecks; if PW approves on the first try, agency referral runs after that.
+        """
+        needs_agency_referral = permit.segment not in [
+            Segment.PRE_APPROVED_LIKE,
+            Segment.CUSTOM_LIKE,
+            Segment.SELF_CERT_LIKE,
+        ]
+        agency_referral_proc = None
         public_works_approved = False
         while not public_works_approved:
             public_works_approved = yield self.env.process(self.public_works(permit))
             if not public_works_approved:
+                if needs_agency_referral and agency_referral_proc is None:
+                    agency_referral_proc = self.env.process(self.agency_referral(permit))
                 yield self.env.process(self.applicant_revision(permit))
+        if needs_agency_referral:
+            if agency_referral_proc is not None:
+                yield agency_referral_proc
+            else:
+                yield self.env.process(self.agency_referral(permit))
 
     def planning_until_approved(self, permit: Permit):
         """Loop planning department until approved."""
@@ -455,15 +641,6 @@ class PermitSimulation:
             fire_approved = yield self.env.process(self.fire_review(permit))
             if not fire_approved:
                 yield self.env.process(self.applicant_revision(permit))
-
-    def public_health_review_until_approved(self, permit: Permit):
-        """Loop public health review until approved."""
-        public_health_approved = False
-        while not public_health_approved:
-            public_health_approved = yield self.env.process(self.public_health_review(permit))
-            if not public_health_approved:
-                yield self.env.process(self.applicant_revision(permit))
-
     
     def fire_review(self, permit: Permit):
         """Fire department review (all permits) with approval/recheck logic.
@@ -497,13 +674,13 @@ class PermitSimulation:
             if is_initial:
                 if random.random() < 0.70:
                     # Quick review: ~1 day (normal distribution around 1 day)
-                    duration_days = self.sample_normal(1, 0.2)
+                    duration_days = self.sample_stage_duration("fire", 1, 0.2)
                 else:
                     # Detailed review: ~13 days (normal distribution around 13 days)
-                    duration_days = self.sample_normal(8, 2)
+                    duration_days = self.sample_stage_duration("fire", 8, 2)
             else:
                 # Recheck uses shorter time
-                duration_days = self.sample_normal(2, 0.5)
+                duration_days = self.sample_stage_duration("fire", 2, 0.5)
             yield self.env.timeout(duration_days)
 
             # Mark end of active review time and notify revisions if no reviews remain
@@ -532,69 +709,6 @@ class PermitSimulation:
             permit.fire_review_end = self.env.now
         else:
             permit.fire_rechecks += 1
-
-        return approved
-    
-    def public_health_review(self, permit: Permit):
-        """Public Health department review (1.3% of permits) with approval/recheck logic."""
-        # Pause if an applicant revision is in progress.
-        rev_evt = self._revision_events.get(permit.permit_id)
-        if rev_evt is not None and not rev_evt.triggered:
-            yield rev_evt
-
-        is_initial = permit.public_health_rechecks == 0
-        if is_initial and permit.public_health_request is None:
-            permit.public_health_request = self.env.now
-        request_time = self.env.now
-
-        priority = 1 if permit.public_health_rechecks == 0 else 0
-        with self.public_health_servers.request(priority=priority) as request:
-            yield request
-            service_start_time = self.env.now
-            if is_initial:
-                permit.public_health_service_start = service_start_time
-            permit.public_health_total_waiting += (service_start_time - request_time)
-            if is_initial:
-                permit.public_health_initial_waiting += (service_start_time - request_time)
-            else:
-                permit.public_health_recheck_waiting += (service_start_time - request_time)
-            # Mark review service as active
-            self._active_reviews[permit.permit_id] = self._active_reviews.get(permit.permit_id, 0) + 1
-
-            # N(10, 2) days - low confidence (for initial)
-            if is_initial:
-                duration_days = self.sample_normal(10, 2)
-            else:
-                # Recheck uses shorter time
-                duration_days = self.sample_normal(5, 1)
-            yield self.env.timeout(duration_days)
-
-            # Mark end of active review time and notify revisions if no reviews remain
-            pid = permit.permit_id
-            self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
-            if self._active_reviews[pid] <= 0:
-                self._active_reviews[pid] = 0
-                no_evt = self._no_active_events.get(pid)
-                if no_evt is not None and not no_evt.triggered:
-                    no_evt.succeed()
-            service_end_time = self.env.now
-            if is_initial:
-                permit.public_health_initial_service += (service_end_time - service_start_time)
-            else:
-                permit.public_health_recheck_service += (service_end_time - service_start_time)
-        
-        if permit.public_health_rechecks == 0:
-            # 25% approved, 75% need re-check
-            approved = random.random() < 0.25
-            is_initial = False
-        else:
-            # 95% approved, 5% need re-check if has already been rechecked
-            approved = random.random() < 0.95
-
-        if approved:
-            permit.public_health_end = self.env.now
-        else:
-            permit.public_health_rechecks += 1
 
         return approved
 
@@ -642,17 +756,15 @@ class PermitSimulation:
         debris_process = self.env.process(self.debris_removal_path(permit))
         
         # Path 2: Authorization and plan preparation
-        plan_process = self.env.process(self.plan_path(permit))
+        plan_process = self.env.process(self.pre_application_activities(permit))
         
-        # Wait for both paths to complete
-        yield debris_process & plan_process
+        yield plan_process
         
         # Planning department (skipped for segments 5&6) - loop until approved
         yield self.env.process(self.planning_until_approved(permit))
         
-        # Agency Referrals permits (for non-like-for-like segments 2, 4, 6)
-        # Runs sequentially between planning and public works
-        yield self.env.process(self.misc_permits(permit))
+        # Special zoning review (for subset of permits)
+        yield self.env.process(self.special_zoning_review(permit))
         
         # Parallel processes: Building & Safety (Public Works), Fire Review, and Public Health Review
         parallel_processes = []
@@ -663,9 +775,6 @@ class PermitSimulation:
         # Fire review: all permits go through fire review - loop until approved
         parallel_processes.append(self.env.process(self.fire_review_until_approved(permit)))
         
-        # Public Health review: 1.3% of permits - loop until approved
-        if random.random() < 0.013:
-            parallel_processes.append(self.env.process(self.public_health_review_until_approved(permit)))
         
         # Wait for all parallel processes to complete
         if parallel_processes:
@@ -686,25 +795,20 @@ class PermitSimulation:
         # Debris removal first (EPA → USACE)
         yield self.env.process(self.debris_removal_path(permit))
         
-        # Then authorization and plan preparation
-        yield self.env.process(self.securing_authorization(permit))
-        yield self.env.process(self.prepare_submit_plans(permit))
+        # Then combined pre-application activities (authorization + plan preparation)
+        yield self.env.process(self.pre_application_activities(permit))
         
         # Planning department (skipped for segments 5&6) - loop until approved
         yield self.env.process(self.planning_until_approved(permit))
         
-        # Agency Referrals permits (for non-like-for-like segments 2, 4, 6)
-        yield self.env.process(self.misc_permits(permit))
+        # Special zoning review
+        yield self.env.process(self.special_zoning_review(permit))
         
         # Building & Safety (Public Works) - loop until approved
         yield self.env.process(self.public_works_until_approved(permit))
         
         # Fire review: all permits go through fire review (sequential) - loop until approved
         yield self.env.process(self.fire_review_until_approved(permit))
-        
-        # Public Health review: 1.3% of permits (sequential) - loop until approved
-        if random.random() < 0.013:
-            yield self.env.process(self.public_health_review_until_approved(permit))
         
         # Ready for construction
         permit.ready_for_construction = self.env.now
@@ -717,7 +821,6 @@ class PermitSimulation:
         """
         parallel_processes = []
         parallel_processes.append(self.env.process(self.debris_removal_path(permit)))
-        parallel_processes.append(self.env.process(self.securing_authorization(permit)))
         parallel_processes.append(self.env.process(self.parallel_plan_reviews(permit)))
         yield simpy.AllOf(self.env, parallel_processes)
         
@@ -729,25 +832,18 @@ class PermitSimulation:
     
     def debris_removal_path(self, permit: Permit):
         """Debris removal path: EPA → USACE."""
-        yield self.env.timeout(45) # 45 day wait for debris removal to start
+        yield self.env.timeout(23) # 23 day wait for debris removal to start
         yield self.env.process(self.epa_debris_removal(permit))
         yield self.env.process(self.usace_debris_removal(permit))
-    
-    def plan_path(self, permit: Permit):
-        """Authorization and plan preparation path."""
-        yield self.env.process(self.securing_authorization(permit))
-        yield self.env.process(self.prepare_submit_plans(permit))
 
     def parallel_plan_reviews(self, permit: Permit):
-        """Parallel reviews path after plan submission."""
-        yield self.env.process(self.prepare_submit_plans(permit))
+        """Parallel reviews path after combined pre-application activities."""
+        yield self.env.process(self.pre_application_activities(permit))
         parallel_processes = []
         parallel_processes.append(self.env.process(self.planning_until_approved(permit)))
-        parallel_processes.append(self.env.process(self.misc_permits(permit)))
+        parallel_processes.append(self.env.process(self.special_zoning_review(permit)))
         parallel_processes.append(self.env.process(self.public_works_until_approved(permit)))
         parallel_processes.append(self.env.process(self.fire_review_until_approved(permit)))
-        if random.random() < 0.013:
-            parallel_processes.append(self.env.process(self.public_health_review_until_approved(permit)))
         yield simpy.AllOf(self.env, parallel_processes)
     
     def create_permit(self) -> Permit:
@@ -847,17 +943,21 @@ class PermitSimulation:
             if p.usace_debris_end is not None and p.usace_debris_service_start is not None
         ]
 
+        epa_cal = epa_debris_calendar_metrics(self.completed_permits)
         stats["debris_removal_epa"] = {
             "waiting_mean": statistics.mean(epa_waiting) if epa_waiting else 0,
             "waiting_median": statistics.median(epa_waiting) if epa_waiting else 0,
             "service_mean": statistics.mean(epa_service) if epa_service else 0,
             "service_median": statistics.median(epa_service) if epa_service else 0,
+            **epa_cal,
         }
+        usace_cal = usace_debris_calendar_metrics(self.completed_permits)
         stats["debris_removal_usace"] = {
             "waiting_mean": statistics.mean(usace_waiting) if usace_waiting else 0,
             "waiting_median": statistics.median(usace_waiting) if usace_waiting else 0,
             "service_mean": statistics.mean(usace_service) if usace_service else 0,
             "service_median": statistics.median(usace_service) if usace_service else 0,
+            **usace_cal,
         }
 
         # Total waiting and service time (across all stages)
@@ -870,10 +970,9 @@ class PermitSimulation:
                 + p.planning_total_waiting
                 + p.public_works_total_waiting
                 + p.fire_review_total_waiting
-                + p.public_health_total_waiting
             )
-            if p.misc_request is not None and p.misc_service_start is not None:
-                waiting += p.misc_service_start - p.misc_request
+            if p.agency_referral_request is not None and p.agency_referral_service_start is not None:
+                waiting += p.agency_referral_service_start - p.agency_referral_request
             total_waiting_times.append(waiting)
 
             service = 0.0
@@ -888,10 +987,11 @@ class PermitSimulation:
             service += p.planning_initial_service + p.planning_recheck_service
             service += p.public_works_initial_service + p.public_works_recheck_service
             service += p.fire_initial_service + p.fire_recheck_service
-            service += p.public_health_initial_service + p.public_health_recheck_service
             service += p.applicant_revisions_total_time
-            if p.misc_end is not None and p.misc_service_start is not None:
-                service += p.misc_end - p.misc_service_start
+            if p.agency_referral_end is not None and p.agency_referral_service_start is not None:
+                service += p.agency_referral_end - p.agency_referral_service_start
+            if p.zoning_end is not None and p.zoning_start is not None:
+                service += p.zoning_end - p.zoning_start
             total_service_times.append(service)
 
         stats["total_waiting_time"] = {
@@ -907,6 +1007,34 @@ class PermitSimulation:
             "std": statistics.stdev(total_service_times) if len(total_service_times) > 1 else 0,
             "min": min(total_service_times) if total_service_times else 0,
             "max": max(total_service_times) if total_service_times else 0,
+        }
+
+        county_days = [_permit_county_review_days(p) for p in self.completed_permits]
+        applicant_days = [_permit_applicant_days(p) for p in self.completed_permits]
+        debris_only_days = []
+        for p in self.completed_permits:
+            d = p.epa_debris_total_waiting + p.usace_debris_total_waiting
+            if p.epa_debris_end is not None and p.epa_debris_service_start is not None:
+                d += p.epa_debris_end - p.epa_debris_service_start
+            if p.usace_debris_end is not None and p.usace_debris_service_start is not None:
+                d += p.usace_debris_end - p.usace_debris_service_start
+            debris_only_days.append(d)
+
+        stats["county_review_vs_applicant"] = {
+            "county_review_mean": statistics.mean(county_days) if county_days else 0,
+            "county_review_median": statistics.median(county_days) if county_days else 0,
+            "county_review_std": statistics.stdev(county_days) if len(county_days) > 1 else 0,
+            "applicant_mean": statistics.mean(applicant_days) if applicant_days else 0,
+            "applicant_median": statistics.median(applicant_days) if applicant_days else 0,
+            "applicant_std": statistics.stdev(applicant_days) if len(applicant_days) > 1 else 0,
+            "debris_mean": statistics.mean(debris_only_days) if debris_only_days else 0,
+            "definition": (
+                "County = planning + public works + fire + special zoning + agency referral "
+                "(waiting + review service). Applicant = pre-application (plan prep) + applicant "
+                "revisions. Debris (EPA/USACE) separate. Public works and fire overlap in "
+                "'standard' flow (double-counts calendar). 'Standard' may finish before debris "
+                "completes, so sums can exceed (ready_for_construction - created_at)."
+            ),
         }
 
         return stats

@@ -9,6 +9,24 @@ import numpy as np
 from typing import List, Optional
 from permit_simulation import Permit
 
+DEFAULT_GANTT_COLORS = {
+    "EPA Debris (waiting)": "#B3E5FC",      # Light blue (waiting state)
+    "EPA Debris (service)": "#0288D1",      # Darker blue (active state)
+    "USACE Debris (waiting)": "#B3E5FC",
+    "USACE Debris (service)": "#0288D1",
+    "Planning (waiting)": "#FFE0B2",        # Light orange (waiting state)
+    "Planning (service)": "#FF8F00",        # Darker orange (active state)
+    "Agency Referral (waiting)": "#E1BEE7", # Light purple (waiting state)
+    "Agency Referral (service)": "#7B1FA2", # Darker purple (active state)
+    "Special Zoning": "#FFF59D",            # Light yellow
+    "Public Works (waiting)": "#F0F4C3",    # Light purple-gray (waiting state)
+    "Public Works (service)": "#9575CD",    # Medium purple (active state)
+    "Fire Review (waiting)": "#FFCCBC",     # Light red/pink (waiting state)
+    "Fire Review (service)": "#D84315",     # Darker red (active state)
+    "Pre-Application Activities": "#C8E6C9", # Light green
+    "Applicant Revisions": "#81C784",       # Medium green
+}
+
 
 def calculate_stage_times(permit: Permit) -> dict:
     """
@@ -34,14 +52,16 @@ def calculate_stage_times(permit: Permit) -> dict:
     ):
         stages["USACE Debris (Waiting)"] = permit.usace_debris_service_start - permit.usace_debris_request
         stages["USACE Debris (Service)"] = permit.usace_debris_end - permit.usace_debris_service_start
+
     
-    # Authorization (no waiting, just service time)
+    # Pre-application activities (authorization + plan preparation, service only)
+    pre_app = 0.0
     if permit.authorization_start is not None and permit.authorization_end is not None:
-        stages['Authorization'] = permit.authorization_end - permit.authorization_start
-    
-    # Plan preparation (no waiting, just service time)
+        pre_app += permit.authorization_end - permit.authorization_start
     if permit.plan_prep_start is not None and permit.plan_prep_end is not None:
-        stages['Plan Preparation'] = permit.plan_prep_end - permit.plan_prep_start
+        pre_app += permit.plan_prep_end - permit.plan_prep_start
+    if pre_app > 0:
+        stages["Pre-application activities"] = pre_app
 
     # Applicant revisions (aggregated service time done by applicant)
     if getattr(permit, "applicant_revisions_total_time", 0.0) > 0:
@@ -89,26 +109,12 @@ def calculate_stage_times(permit: Permit) -> dict:
         stages["Fire Review Total Waiting"] = permit.fire_initial_waiting + permit.fire_recheck_waiting
         stages["Fire Review Total Service"] = permit.fire_initial_service + permit.fire_recheck_service
     
-    # Public Health review - four buckets (initial waiting/service, recheck waiting/service)
-    if (
-        permit.public_health_initial_waiting > 0
-        or permit.public_health_initial_service > 0
-        or permit.public_health_recheck_waiting > 0
-        or permit.public_health_recheck_service > 0
-    ):
-        stages["Public Health Initial (Waiting)"] = permit.public_health_initial_waiting
-        stages["Public Health Initial (Service)"] = permit.public_health_initial_service
-        stages["Public Health Recheck (Waiting)"] = permit.public_health_recheck_waiting
-        stages["Public Health Recheck (Service)"] = permit.public_health_recheck_service
-        stages["Public Health Total Waiting"] = permit.public_health_initial_waiting + permit.public_health_recheck_waiting
-        stages["Public Health Total Service"] = permit.public_health_initial_service + permit.public_health_recheck_service
-    
-    # Agency Referrals permits - separate waiting and service
-    if (permit.misc_request is not None and 
-        permit.misc_service_start is not None and 
-        permit.misc_end is not None):
-        stages['Agency Referrals (Waiting)'] = permit.misc_service_start - permit.misc_request
-        stages['Agency Referrals (Service)'] = permit.misc_end - permit.misc_service_start
+    # Agency referral — separate waiting and service
+    if (permit.agency_referral_request is not None and
+        permit.agency_referral_service_start is not None and
+        permit.agency_referral_end is not None):
+        stages['Agency Referral (Waiting)'] = permit.agency_referral_service_start - permit.agency_referral_request
+        stages['Agency Referral (Service)'] = permit.agency_referral_end - permit.agency_referral_service_start
     
     # Waiting time (gaps between stages)
     total_processing_time = permit.ready_for_construction - permit.created_at if permit.ready_for_construction else None
@@ -145,17 +151,14 @@ def calculate_step_waiting_service_totals(permit: Permit) -> dict:
     if usace_waiting > 0 or usace_service > 0:
         steps["USACE Debris"] = {"waiting": usace_waiting, "service": usace_service}
 
-    # Authorization (service only)
+    # Pre-application activities: authorization + plan preparation (single step)
+    pre_app_service = 0.0
     if permit.authorization_start is not None and permit.authorization_end is not None:
-        auth_service = permit.authorization_end - permit.authorization_start
-        if auth_service > 0:
-            steps["Authorization"] = {"waiting": 0.0, "service": auth_service}
-
-    # Plan preparation (service only)
+        pre_app_service += permit.authorization_end - permit.authorization_start
     if permit.plan_prep_start is not None and permit.plan_prep_end is not None:
-        prep_service = permit.plan_prep_end - permit.plan_prep_start
-        if prep_service > 0:
-            steps["Plan Preparation"] = {"waiting": 0.0, "service": prep_service}
+        pre_app_service += permit.plan_prep_end - permit.plan_prep_start
+    if pre_app_service > 0:
+        steps["Pre-Application Activities"] = {"waiting": 0.0, "service": pre_app_service}
 
     # Applicant revisions (service only, no agency waiting)
     if getattr(permit, "applicant_revisions_total_time", 0.0) > 0:
@@ -170,18 +173,24 @@ def calculate_step_waiting_service_totals(permit: Permit) -> dict:
     if planning_waiting > 0 or planning_service > 0:
         steps["Planning"] = {"waiting": planning_waiting, "service": planning_service}
 
-    # Agency Referrals permits
-    misc_waiting = 0.0
-    misc_service = 0.0
+    # Agency referral
+    agency_referral_waiting = 0.0
+    agency_referral_service = 0.0
     if (
-        permit.misc_request is not None
-        and permit.misc_service_start is not None
-        and permit.misc_end is not None
+        permit.agency_referral_request is not None
+        and permit.agency_referral_service_start is not None
+        and permit.agency_referral_end is not None
     ):
-        misc_waiting = permit.misc_service_start - permit.misc_request
-        misc_service = permit.misc_end - permit.misc_service_start
-    if misc_waiting > 0 or misc_service > 0:
-        steps["Agency Referrals"] = {"waiting": misc_waiting, "service": misc_service}
+        agency_referral_waiting = permit.agency_referral_service_start - permit.agency_referral_request
+        agency_referral_service = permit.agency_referral_end - permit.agency_referral_service_start
+    if agency_referral_waiting > 0 or agency_referral_service > 0:
+        steps["Agency Referral"] = {"waiting": agency_referral_waiting, "service": agency_referral_service}
+
+    # Special Zoning Review (service only, no agency waiting tracked)
+    if getattr(permit, "zoning_start", None) is not None and getattr(permit, "zoning_end", None) is not None:
+        zoning_service = permit.zoning_end - permit.zoning_start
+        if zoning_service > 0:
+            steps["Special Zoning"] = {"waiting": 0.0, "service": zoning_service}
 
     # Public Works (aggregate initial + recheck)
     public_works_waiting = permit.public_works_total_waiting
@@ -200,32 +209,39 @@ def calculate_step_waiting_service_totals(permit: Permit) -> dict:
     if fire_waiting > 0 or fire_service > 0:
         steps["Fire Review"] = {"waiting": fire_waiting, "service": fire_service}
 
-    # Public Health Review (aggregate initial + recheck)
-    ph_waiting = permit.public_health_initial_waiting + permit.public_health_recheck_waiting
-    ph_service = permit.public_health_initial_service + permit.public_health_recheck_service
-    if ph_waiting > 0 or ph_service > 0:
-        steps["Public Health"] = {"waiting": ph_waiting, "service": ph_service}
-
     return steps
 
 
-def _gantt_intervals_from_permit(permit: Permit):
+def _gantt_intervals_from_permit(permit: Permit, color_map: Optional[dict] = None):
     """
     Extract (start, end, label, color, is_waiting) for each activity interval from a permit.
     Returns a list of tuples. Waiting and service are separate intervals where applicable.
+
+    Args:
+        permit: Permit object to extract intervals from.
+        color_map: Optional dict mapping exact interval labels to colors.
+            Supported labels include:
+            - "<Stage> (waiting)" and "<Stage> (service)" for queueable stages
+            - "Special Zoning", "Pre-Application Activities", "Applicant Revisions"
+            If omitted, uses DEFAULT_GANTT_COLORS.
     """
+    colors = dict(DEFAULT_GANTT_COLORS)
+    if color_map:
+        colors.update(color_map)
+
+    def stage_color(label: str, fallback: str) -> str:
+        return colors.get(label, fallback)
+
     intervals = []
-    # Stages: (label, request_attr, service_start_attr, end_attr, waiting_color, service_color)
+    # Stages: (label, request_attr, service_start_attr, end_attr)
     stages_info = [
-        ('EPA Debris', 'epa_debris_request', 'epa_debris_service_start', 'epa_debris_end', '#D9E1AD', '#98A83D'),
-        ('USACE Debris', 'usace_debris_request', 'usace_debris_service_start', 'usace_debris_end', '#D9E1AD', '#98A83D'),
-        ('Authorization', 'authorization_start', None, 'authorization_end', None, '#659DB2'),
-        ('Plan Preparation', 'plan_prep_start', None, 'plan_prep_end', None, '#659DB2'),
-        ('Planning', 'planning_request', 'planning_service_start', 'planning_end', '#F3DDA1', '#D9A71C'),
-        ('Agency Referrals', 'misc_request', 'misc_service_start', 'misc_end', '#F3DDA1', '#D9A71C'),
-        ('Public Works', 'public_works_request', 'public_works_service_start', 'public_works_end', '#F3DDA1', '#D9A71C'),
-        ('Fire Review', 'fire_review_request', 'fire_review_service_start', 'fire_review_end', '#F3DDA1', '#D9A71C'),
-        ('Public Health', 'public_health_request', 'public_health_service_start', 'public_health_end', '#F3DDA1', '#D9A71C'),
+        ("EPA Debris", "epa_debris_request", "epa_debris_service_start", "epa_debris_end"),
+        ("USACE Debris", "usace_debris_request", "usace_debris_service_start", "usace_debris_end"),
+        ("Planning", "planning_request", "planning_service_start", "planning_end"),
+        ("Agency Referral", "agency_referral_request", "agency_referral_service_start", "agency_referral_end"),
+        ("Special Zoning", "zoning_start", None, "zoning_end"),
+        ("Public Works", "public_works_request", "public_works_service_start", "public_works_end"),
+        ("Fire Review", "fire_review_request", "fire_review_service_start", "fire_review_end"),
     ]
 
     # Intervals where the applicant is revising (no reviews should be active).
@@ -252,9 +268,29 @@ def _gantt_intervals_from_permit(permit: Permit):
             result.append((cur, end))
         return result
 
-    review_stages = {"Planning", "Agency Referrals", "Public Works", "Fire Review", "Public Health"}
+    review_stages = {"Planning", "Agency Referral", "Public Works", "Fire Review"}
 
-    for stage_name, request_attr, service_start_attr, end_attr, waiting_color, service_color in stages_info:
+    # Pre-application activities: one bar from start of authorization through plan submission
+    pa_start = getattr(permit, "authorization_start", None)
+    pa_end = getattr(permit, "plan_prep_end", None)
+    if pa_start is not None and pa_end is not None and pa_end > pa_start:
+        intervals.append((
+            pa_start,
+            pa_end,
+            "Pre-Application Activities",
+            stage_color("Pre-Application Activities", "#659DB2"),
+            False,
+        ))
+    elif getattr(permit, "plan_prep_start", None) is not None and pa_end is not None and pa_end > permit.plan_prep_start:
+        intervals.append((
+            permit.plan_prep_start,
+            pa_end,
+            "Pre-Application Activities",
+            stage_color("Pre-Application Activities", "#659DB2"),
+            False,
+        ))
+
+    for stage_name, request_attr, service_start_attr, end_attr in stages_info:
         request_time = getattr(permit, request_attr, None) if request_attr else None
         service_start_time = getattr(permit, service_start_attr, None) if service_start_attr else None
         end_time = getattr(permit, end_attr, None) if end_attr else None
@@ -262,24 +298,49 @@ def _gantt_intervals_from_permit(permit: Permit):
             continue
         if service_start_attr and service_start_time is not None:
             wait_dur = service_start_time - request_time
-            if wait_dur > 0.001 and waiting_color:
-                intervals.append((request_time, service_start_time, f'{stage_name} (waiting)', waiting_color, True))
-            if end_time - service_start_time > 0 and service_color:
+            waiting_label = f"{stage_name} (waiting)"
+            service_label = f"{stage_name} (service)"
+            if wait_dur > 0.001:
+                intervals.append((
+                    request_time,
+                    service_start_time,
+                    waiting_label,
+                    stage_color(waiting_label, "#BDBDBD"),
+                    True,
+                ))
+            if end_time - service_start_time > 0:
                 is_review_service = stage_name in review_stages
                 for seg_start, seg_end in carve_out_revisions(service_start_time, end_time, is_review_service):
                     if seg_end - seg_start > 0:
-                        intervals.append((seg_start, seg_end, f'{stage_name} (service)', service_color, False))
+                        intervals.append((
+                            seg_start,
+                            seg_end,
+                            service_label,
+                            stage_color(service_label, "#81C784"),
+                            False,
+                        ))
         else:
-            if end_time - request_time > 0 and service_color:
-                intervals.append((request_time, end_time, stage_name, service_color, False))
+            if end_time - request_time > 0:
+                intervals.append((
+                    request_time,
+                    end_time,
+                    stage_name,
+                    stage_color(stage_name, "#81C784"),
+                    False,
+                ))
 
     # Applicant revisions: service-only intervals recorded on the permit
     for start, end in getattr(permit, "applicant_revision_intervals", []):
         if start is None or end is None:
             continue
         if end - start > 0:
-            # Use same blue as Authorization/Plan Preparation so they appear together visually
-            intervals.append((start, end, "Applicant Revisions", "#659DB2", False))
+            intervals.append((
+                start,
+                end,
+                "Applicant Revisions",
+                stage_color("Applicant Revisions", "#659DB2"),
+                False,
+            ))
     return intervals
 
 
@@ -311,6 +372,7 @@ def plot_gantt_single_permit(
     permit_id: Optional[int] = None,
     figsize=(14, 5),
     title: str = None,
+    color_map: Optional[dict] = None,
 ):
     """
     Create a Gantt chart for a single permit with parallel activities on separate rows
@@ -322,6 +384,9 @@ def plot_gantt_single_permit(
         permit_id: Permit ID to look up from permits list (use with permits)
         figsize: Figure size tuple
         title: Optional chart title (default: "Permit {id} (Segment {segment})")
+        color_map: Optional dict of interval-label -> color overrides.
+            Example keys: "EPA Debris (waiting)", "Planning (service)",
+            "Special Zoning", "Pre-Application Activities", "Applicant Revisions".
 
     Note: completed_permits is ordered by completion time, not permit_id. Use permit_id
     to plot a specific permit by its ID, e.g. plot_gantt_single_permit(permits=sim.completed_permits, permit_id=237)
@@ -336,7 +401,7 @@ def plot_gantt_single_permit(
     else:
         raise ValueError("Provide either permit= or (permits=, permit_id=)")
 
-    intervals = _gantt_intervals_from_permit(p)
+    intervals = _gantt_intervals_from_permit(p, color_map=color_map)
     if not intervals:
         print("No activity intervals found for this permit.")
         return None, None
@@ -346,21 +411,20 @@ def plot_gantt_single_permit(
     # Define the four fixed rows the user requested
     # Six fixed rows in logical order:
     # 1) Debris removal
-    # 2) Authorization & Plan Preparation
-    # 3) Planning & Zoning (Planning + Agency Referrals)
+    # 2) Pre-application activities
+    # 3) Planning & Zoning (Planning + Agency Referral)
     # 4) Public Works
     # 5) Fire
-    # 6) Public Health
     row_definitions = [
         ("Remove debris", ["EPA Debris", "USACE Debris"]),
-        ("Secure financing & prepare plans", ["Authorization", "Plan Preparation", "Applicant Revisions"]),
-        ("Permit reviews", ["Planning", "Agency Referrals", "Public Works"]),
-        ("Fire Review", ["Fire Review"])
+        ("Applicant activities", ["Pre-Application Activities", "Applicant Revisions"]),
+        ("Planning, Special Zoning, and Building & Safety", ["Planning", "Special Zoning", "Public Works"]),
+        ("Agency Referral and Fire", ["Agency Referral", "Fire Review"])
     ]
     n_rows = len(row_definitions)
     y_positions = list(range(n_rows))
-    # We'll place Debris at the top, then Planning/Agency Referrals/Public Works,
-    # then Fire Review, and Public Health at the bottom.
+    # We'll place Debris at the top, then Planning/Agency Referral/Public Works,
+    # then Fire Review at the bottom.
     row_labels = [""] * n_rows
 
     # Map base stage name -> logical row index, and build labels by display index
@@ -376,7 +440,7 @@ def plot_gantt_single_permit(
     # Define canonical order for legend (match stages_info from _gantt_intervals_from_permit)
     legend_order = [
         ('Remove debris (waiting)', True), ('Remove debris (service)', False),
-        ('Secure financing & prepare plans', False),
+        ('Homeowner', False),
         ('Permit reviews (waiting)', True), ('Permit reviews (service)', False),
     ]
     seen = set()  # (label, is_waiting)
@@ -397,7 +461,7 @@ def plot_gantt_single_permit(
         if logical_row is None:
             # Skip stages that are not in the four requested rows
             continue
-        # Map logical row (0 = Debris, 1 = Planning/Agency Referrals/PW, 2 = Fire, 3 = Public Health)
+        # Map logical row (0 = Debris, 1 = Planning/Agency Referral/PW, 2 = Fire)
         # to display coordinate so Debris is at the top.
         y_pos = n_rows - 1 - logical_row
         hatch = "///" if is_waiting else None
@@ -452,6 +516,7 @@ def plot_gantt_three_random_permits(
     segment_value: Optional[int] = None,
     random_seed: Optional[int] = None,
     figsize=(14, 8),
+    color_map: Optional[dict] = None,
 ):
     """
     Plot a Gantt chart showing multiple random permits in the same chart.
@@ -462,6 +527,7 @@ def plot_gantt_three_random_permits(
         segment_value: If provided, only pick permits from this segment (e.g. 4 = CUSTOM_NON_LIKE)
         random_seed: Optional seed for reproducible random choice
         figsize: Figure size tuple
+        color_map: Optional dict of interval-label -> color overrides.
     """
     from permit_simulation import Segment
 
@@ -484,10 +550,11 @@ def plot_gantt_three_random_permits(
     selected = rng.choice(pool, size=min(n_permits, len(pool)), replace=False)
 
     row_definitions = [
-        ("Debris removal", ["EPA Debris", "USACE Debris"]),
-        ("Authorization & Plan preparation", ["Authorization", "Plan Preparation", "Applicant Revisions"]),
-        ("Permit reviews", ["Planning", "Agency Referrals", "Public Works"]),
-        ("Fire Review", ["Fire Review"]),
+        ("Remove debris", ["EPA Debris", "USACE Debris"]),
+        ("Applicant activities", ["Pre-Application Activities", "Applicant Revisions"]),
+        # Must match _gantt_intervals_from_permit stage names ("Special Zoning", not "Special Zoning Review")
+        ("Planning and Building & Safety", ["Planning", "Special Zoning", "Public Works"]),
+        ("Agency Referral and Fire", ["Agency Referral", "Fire Review"]),
     ]
     n_rows_per_permit = len(row_definitions)
     stage_to_row = {}
@@ -503,40 +570,30 @@ def plot_gantt_three_random_permits(
     fig, ax = plt.subplots(figsize=figsize)
     bar_height = 0.65
 
-    # Map raw stage names to grouped legend labels (for waiting vs active)
-    legend_group = {
-        "EPA Debris": "Debris removal",
-        "USACE Debris": "Debris removal",
-        "Authorization": "Authorization & Plan preparation",
-        "Plan Preparation": "Authorization & Plan preparation",
-        "Planning": "Permit reviews",
-        "Agency Referrals": "Permit reviews",
-        "Public Works": "Permit reviews",
-        "Applicant Revisions": "Authorization & Plan preparation",
-    }
+    # One legend entry per interval label actually drawn (full label + waiting flag)
+    plotted_legend = {}
 
-    legend_order = [
-        ("Debris removal (waiting)", True), ("Debris removal (active)", False),
-        ("Authorization & Plan preparation (waiting)", True), ("Authorization & Plan preparation (active)", False),
-        ("Permit reviews (waiting)", True), ("Permit reviews (active)", False),
+    # Consistent legend order; unknown labels sort last
+    _legend_label_order = [
+        "EPA Debris (waiting)", "EPA Debris (service)",
+        "USACE Debris (waiting)", "USACE Debris (service)",
+        "Pre-Application Activities",
+        "Planning (waiting)", "Planning (service)",
+        "Special Zoning",
+        "Public Works (waiting)", "Public Works (service)",
+        "Agency Referral (waiting)", "Agency Referral (service)",
+        "Fire Review (waiting)", "Fire Review (service)",
+        "Applicant Revisions",
     ]
-    label_to_color = {}
-    seen_legend = set()
+    _order_index = {lab: i for i, lab in enumerate(_legend_label_order)}
+
+    def _legend_sort_key(item):
+        (lab, _iw), _col = item
+        return (_order_index.get(lab, len(_legend_label_order)), lab)
 
     for perm_idx, permit in enumerate(selected):
-        intervals = _gantt_intervals_from_permit(permit)
+        intervals = _gantt_intervals_from_permit(permit, color_map=color_map)
         y_offset = perm_idx * n_rows_per_permit
-
-        for start, end, label, color, is_waiting in intervals:
-            base = label.replace(" (waiting)", "").replace(" (service)", "")
-            group = legend_group.get(base)
-            if group is None:
-                continue
-            suffix = "(waiting)" if is_waiting else "(active)"
-            legend_key = (f"{group} {suffix}", is_waiting)
-            if legend_key not in seen_legend:
-                seen_legend.add(legend_key)
-                label_to_color[legend_key] = color
 
         for start, end, label, color, is_waiting in intervals:
             duration = end - start
@@ -560,6 +617,9 @@ def plot_gantt_three_random_permits(
                 linewidth=0.5,
                 hatch=hatch,
             )
+            leg_key = (label, is_waiting)
+            if leg_key not in plotted_legend:
+                plotted_legend[leg_key] = color
 
     # Horizontal dashed lines separating each permit
     for i in range(1, n_permits):
@@ -567,16 +627,12 @@ def plot_gantt_three_random_permits(
         ax.axhline(y=y_sep, linestyle='--', color='gray', alpha=0.7, linewidth=1.5)
 
     legend_handles = []
-    for label, is_waiting in legend_order:
-        key = (label, is_waiting)
-        if key not in label_to_color:
-            continue
-        color = label_to_color[key]
+    for (lab, is_waiting), color in sorted(plotted_legend.items(), key=_legend_sort_key):
         hatch = "///" if is_waiting else None
         alpha = 0.6 if is_waiting else 0.9
         legend_handles.append(mpatches.Patch(
             facecolor=color, alpha=alpha, edgecolor="black", linewidth=0.5,
-            hatch=hatch, label=label,
+            hatch=hatch, label=lab,
         ))
     ax.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=15)
 
@@ -596,6 +652,7 @@ def plot_gantt_one_random_permit_segment(
     segment_value: int = 4,
     random_seed: Optional[int] = None,
     figsize=(14, 5),
+    color_map: Optional[dict] = None,
 ):
     """
     Plot a Gantt chart for one random permit in the given segment.
@@ -606,6 +663,7 @@ def plot_gantt_one_random_permit_segment(
         segment_value: Segment enum value (default 4 = CUSTOM_NON_LIKE)
         random_seed: Optional seed for reproducible random choice
         figsize: Figure size tuple
+        color_map: Optional dict of interval-label -> color overrides.
     """
     from permit_simulation import Segment
     try:
@@ -618,7 +676,7 @@ def plot_gantt_one_random_permit_segment(
         return None, None
     rng = np.random.default_rng(random_seed)
     permit = rng.choice(segment_permits)
-    return plot_gantt_single_permit(permit, figsize=figsize)
+    return plot_gantt_single_permit(permit, figsize=figsize, color_map=color_map)
 
 
 def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxplot=True):
@@ -886,17 +944,19 @@ def plot_average_waiting_and_service_by_step(
     label_map: Optional[dict] = None,
 ):
     """
-    Create a bar chart showing average total waiting vs service time for each
-    major process step (EPA, USACE, Planning, Public Works, etc.), with
-    initial and recheck times aggregated together.
+    Bar chart of average waiting vs service time by process step.
 
-    Args:
-        permits: List of Permit objects
-        figsize: Figure size tuple
-        label_map: Optional dict mapping internal step name to display label.
-                   Internal names: EPA Debris, USACE Debris, Authorization,
-                   Plan Preparation, Planning, Agency Referrals, Public Works,
-                   Fire Review, Public Health.
+    Uses the same *types* of labels as a standard process chart:
+    - Title: average waiting vs service by process step
+    - Y-axis: average time (days)
+    - X-axis: process step
+    - Legend: Waiting (gray) vs Service (green)
+
+    Step *names* stay as your internal keys unless you pass ``label_map``
+    (optional display strings only—you do not need to match any fixed list).
+
+    Returns:
+        (fig, ax) or (None, None) if there is nothing to plot.
     """
     if not permits:
         print("No permits provided for waiting/service by step chart.")
@@ -916,24 +976,26 @@ def plot_average_waiting_and_service_by_step(
         print("No step data found for waiting/service chart.")
         return None, None
 
-    # Define preferred order to match process flow (keys from calculate_step_waiting_service_totals)
+    # Process-flow order; only steps that appear in the data are plotted
     preferred_order = [
         "EPA Debris",
         "USACE Debris",
-        "Authorization",
-        "Plan Preparation",
+        "Pre-Application Activities",
         "Planning",
-        "Agency Referrals",
+        "Special Zoning",
         "Public Works",
+        "Agency Referral",
         "Fire Review",
-        "Public Health",
+        "Applicant Revisions",
     ]
 
     steps = [s for s in preferred_order if s in step_waiting]
-    # Add any remaining steps not in preferred order
     for step in sorted(step_waiting.keys()):
         if step not in steps:
             steps.append(step)
+
+    label_map = label_map or {}
+    display_labels = [label_map.get(s, s) for s in steps]
 
     waiting_means = [np.mean(step_waiting[s]) for s in steps]
     waiting_stds = [np.std(step_waiting[s]) for s in steps]
@@ -962,19 +1024,38 @@ def plot_average_waiting_and_service_by_step(
         edgecolor="black",
     )
 
-    # Add value labels (means) above each bar
+    ax.set_title(
+        "Average Total Waiting vs Service Time by Process Step",
+        fontsize=14,
+        fontweight="bold",
+        pad=12,
+    )
+    ax.set_ylabel("Average Time (days)", fontsize=12)
+    ax.set_xlabel("Process Step", fontsize=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels(display_labels, rotation=40, ha="right", fontsize=10)
+    ax.legend(loc="upper right", fontsize=11, framealpha=0.95)
+    ax.grid(axis="y", alpha=0.35, linestyle="-", color="#BDBDBD")
+    ax.set_axisbelow(True)
+
+    ymax = max(max(waiting_means + [0]), max(service_means + [0]))
+    if ymax > 0:
+        ax.set_ylim(0, ymax * 1.12)
+
+    # Value labels above bars (skip clutter when bar is tiny)
     for bar in list(bars_wait) + list(bars_service):
         height = bar.get_height()
+        if height < 0.05:
+            continue
         ax.text(
             bar.get_x() + bar.get_width() / 2.0,
             height,
             f"{height:.1f}",
             ha="center",
             va="bottom",
-            fontsize=9,
+            fontsize=8,
         )
 
-    # Print summary statistics (mean and standard deviation) in text after the graph
     print("Average waiting and service time by step (days):")
     for step, w_mean, w_std, s_mean, s_std in zip(
         steps, waiting_means, waiting_stds, service_means, service_stds
@@ -984,6 +1065,9 @@ def plot_average_waiting_and_service_by_step(
             f"waiting mean={w_mean:.2f}, σ={w_std:.2f}; "
             f"service mean={s_mean:.2f}, σ={s_std:.2f}"
         )
+
+    plt.tight_layout()
+    return fig, ax
 
 
 def plot_permits_by_stage_over_time(
@@ -1091,24 +1175,6 @@ def plot_permits_by_stage_over_time(
     ax.set_ylim(0, 100)
     ax.legend(loc="lower right")
     ax.grid(axis="both", alpha=0.3)
-
-    plt.tight_layout()
-    return fig, ax
-
-    ax.set_xlabel("Process Step", fontsize=12)
-    ax.set_ylabel("Average Time (days)", fontsize=12)
-    ax.set_title(
-        "Average Total Waiting vs Service Time by Process Step",
-        fontsize=14,
-        fontweight="bold",
-    )
-    ax.set_xticks(x)
-    default_labels = {"Authorization": "Secure financing"}
-    merged_labels = {**default_labels, **(label_map or {})}
-    display_labels = [merged_labels.get(s, s) for s in steps]
-    ax.set_xticklabels(display_labels, rotation=45, ha="right")
-    ax.legend()
-    ax.grid(axis="y", alpha=0.3)
 
     plt.tight_layout()
     return fig, ax

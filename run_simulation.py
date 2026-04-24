@@ -19,6 +19,9 @@ def run_simulation(
     pct_custom: float = 0.90,
     pct_self_cert: float = 0.08,
     pct_like_for_like: float = 0.80,
+    review_duration_families: dict[str, str] | None = None,
+    review_duration_multipliers: dict[str, float] | None = None,
+    pre_application_distribution: str = "baseline",
 ):
     """
     Run the permit simulation.
@@ -33,6 +36,12 @@ def run_simulation(
         pct_custom: Fraction of permits that are custom builds (0–1).
         pct_self_cert: Fraction of permits that are self-certification (0–1).
         pct_like_for_like: Fraction of permits that are like-for-like (0–1).
+        review_duration_families: Optional map for review stages (planning/public_works/fire)
+            to sampling family (normal/lognormal/triangular/uniform).
+        review_duration_multipliers: Optional map of duration multipliers by stage.
+            Keys can include planning/public_works/fire/special_zoning/agency_referral.
+        pre_application_distribution: Distribution choice for pre-application duration.
+            Supported values: baseline, lognormal_180, lognormal_60, poisson_10.
     """
     env = simpy.Environment()
     sim = PermitSimulation(
@@ -43,6 +52,9 @@ def run_simulation(
         pct_custom=pct_custom,
         pct_self_cert=pct_self_cert,
         pct_like_for_like=pct_like_for_like,
+        review_duration_families=review_duration_families,
+        review_duration_multipliers=review_duration_multipliers,
+        pre_application_distribution=pre_application_distribution,
     )
     
     def permit_generator():
@@ -212,6 +224,17 @@ def print_statistics(stats: dict):
             print(f"    Min:    {seg_stats['min']:8.2f} days")
             print(f"    Max:    {seg_stats['max']:8.2f} days")
     
+    if stats.get("county_review_vs_applicant"):
+        print("\n" + "-"*80)
+        print("COUNTY REVIEW VS. APPLICANT (mean days per permit, cumulative stage time)")
+        print("-"*80)
+        cv = stats["county_review_vs_applicant"]
+        print(f"  County review — mean: {cv['county_review_mean']:8.2f} d, median: {cv['county_review_median']:.2f} d")
+        print(f"  With applicant  — mean: {cv['applicant_mean']:8.2f} d, median: {cv['applicant_median']:.2f} d")
+        print(f"  Debris (EPA/USACE only, not in sums above) — mean: {cv['debris_mean']:.2f} d")
+        print("  Note: cumulative stage times; parallel reviews and unfinished debris in 'standard'")
+        print("  flow can make county+applicant+debris exceed wall-clock days to construction.")
+
     if "total_waiting_time" in stats:
         print("\n" + "-"*80)
         print("TOTAL WAITING TIME (across all stages)")
