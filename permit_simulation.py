@@ -433,7 +433,7 @@ class PermitSimulation:
         if dist == "baseline":
             if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
                 return self.sample_lognormal(249, 0.53)
-            return max(0, lognorm.rvs(0.886, 0, 444))
+            return max(0, lognorm.rvs(0.896, 0, 456))
         if dist == "lognormal_180":
             return self.sample_lognormal(180, 0.53)
         if dist == "lognormal_60":
@@ -858,7 +858,7 @@ class PermitSimulation:
             yield no_evt
 
         start_time = self.env.now
-        duration_days = self.sample_normal(30, 10)
+        duration_days = self.sample_normal(45, 20)
         permit.applicant_revision_count += 1
         yield self.env.timeout(duration_days)
         end_time = self.env.now
