@@ -27,6 +27,47 @@ DEFAULT_GANTT_COLORS = {
     "Applicant Revisions": "#81C784",       # Medium green
 }
 
+GANTT_COLORS_OPTION_1 = {
+    "EPA Debris (waiting)": "#CFE4FF", #light blue
+    "EPA Debris (service)": "#6DB1FF", #dark blue
+    "USACE Debris (waiting)": "#CFE4FF", #light blue
+    "USACE Debris (service)": "#6DB1FF", #dark blue
+    "Planning (waiting)": "#FFDDA6", #light orange
+    "Planning (service)": "#FC9432", #dark orange
+    "Agency Referral (waiting)": "#DEDEFF", #light purple
+    "Agency Referral (service)": "#9391FF", #dark purple
+    "Special Zoning": "#FFE341", #light yellow
+    "Public Works (waiting)": "#F4D9FF", #light pink
+    "Public Works (service)": "#E08FFF", #dark pink
+    "Fire Review (waiting)": "#FFD9D9", #light red
+    "Fire Review (service)": "#FE7070", #dark red
+    "Pre-Application Activities": "#55C45E", #light green is C3F7C*
+    "Applicant Revisions": "#55C45E", #light green
+}
+
+GANTT_COLORS_OPTION_2 = {
+    "EPA Debris (waiting)": "#CFE4FF",
+    "EPA Debris (service)": "#CDB1FF",
+    "USACE Debris (waiting)": "#CFE4FF",
+    "USACE Debris (service)": "#CDB1FF",
+    "Planning (waiting)": "#FFF7A1",
+    "Planning (service)": "#FFE341",
+    "Agency Referral (waiting)": "#FFDDA6",
+    "Agency Referral (service)": "#FC9432",
+    "Special Zoning": "#FC9432",
+    "Public Works (waiting)": "#FFF7A1",
+    "Public Works (service)": "#FFE341",
+    "Fire Review (waiting)": "#FFF7A1",
+    "Fire Review (service)": "#FFE341",
+    "Pre-Application Activities": "#55C45E",
+    "Applicant Revisions": "#55C45E",
+}
+
+GANTT_COLOR_OPTIONS = {
+    "option_1": GANTT_COLORS_OPTION_1,
+    "option_2": GANTT_COLORS_OPTION_2,
+}
+
 
 def calculate_stage_times(permit: Permit) -> dict:
     """
@@ -212,7 +253,11 @@ def calculate_step_waiting_service_totals(permit: Permit) -> dict:
     return steps
 
 
-def _gantt_intervals_from_permit(permit: Permit, color_map: Optional[dict] = None):
+def _gantt_intervals_from_permit(
+    permit: Permit,
+    color_map: Optional[dict] = None,
+    color_option: str = "option_1",
+):
     """
     Extract (start, end, label, color, is_waiting) for each activity interval from a permit.
     Returns a list of tuples. Waiting and service are separate intervals where applicable.
@@ -223,9 +268,10 @@ def _gantt_intervals_from_permit(permit: Permit, color_map: Optional[dict] = Non
             Supported labels include:
             - "<Stage> (waiting)" and "<Stage> (service)" for queueable stages
             - "Special Zoning", "Pre-Application Activities", "Applicant Revisions"
-            If omitted, uses DEFAULT_GANTT_COLORS.
+            If provided, these entries override the selected color option.
+        color_option: Name of base palette ("option_1" or "option_2").
     """
-    colors = dict(DEFAULT_GANTT_COLORS)
+    colors = dict(GANTT_COLOR_OPTIONS.get(color_option, GANTT_COLORS_OPTION_1))
     if color_map:
         colors.update(color_map)
 
@@ -373,6 +419,7 @@ def plot_gantt_single_permit(
     figsize=(14, 5),
     title: str = None,
     color_map: Optional[dict] = None,
+    color_option: str = "option_1",
 ):
     """
     Create a Gantt chart for a single permit with parallel activities on separate rows
@@ -387,6 +434,7 @@ def plot_gantt_single_permit(
         color_map: Optional dict of interval-label -> color overrides.
             Example keys: "EPA Debris (waiting)", "Planning (service)",
             "Special Zoning", "Pre-Application Activities", "Applicant Revisions".
+        color_option: Name of base Gantt palette ("option_1" or "option_2").
 
     Note: completed_permits is ordered by completion time, not permit_id. Use permit_id
     to plot a specific permit by its ID, e.g. plot_gantt_single_permit(permits=sim.completed_permits, permit_id=237)
@@ -401,7 +449,11 @@ def plot_gantt_single_permit(
     else:
         raise ValueError("Provide either permit= or (permits=, permit_id=)")
 
-    intervals = _gantt_intervals_from_permit(p, color_map=color_map)
+    intervals = _gantt_intervals_from_permit(
+        p,
+        color_map=color_map,
+        color_option=color_option,
+    )
     if not intervals:
         print("No activity intervals found for this permit.")
         return None, None
@@ -437,19 +489,23 @@ def plot_gantt_single_permit(
 
     bar_height = 0.65
 
-    # Define canonical order for legend (match stages_info from _gantt_intervals_from_permit)
+    # One legend entry per interval label actually drawn.
+    # Use a stable process-flow order and put unknown labels last.
     legend_order = [
-        ('Remove debris (waiting)', True), ('Remove debris (service)', False),
-        ('Homeowner', False),
-        ('Permit reviews (waiting)', True), ('Permit reviews (service)', False),
+        "EPA Debris (waiting)", "EPA Debris (service)",
+        "USACE Debris (waiting)", "USACE Debris (service)",
+        "Pre-Application Activities",
+        "Planning (waiting)", "Planning (service)",
+        "Special Zoning",
+        "Public Works (waiting)", "Public Works (service)",
+        "Agency Referral (waiting)", "Agency Referral (service)",
+        "Fire Review (waiting)", "Fire Review (service)",
+        "Applicant Revisions",
     ]
-    seen = set()  # (label, is_waiting)
+    legend_order_index = {lab: i for i, lab in enumerate(legend_order)}
     label_to_color = {}  # (label, is_waiting) -> color
-    for start, end, label, color, is_waiting in intervals:
-        key = (label, is_waiting)
-        if key not in seen:
-            seen.add(key)
-            label_to_color[key] = color
+    for _start, _end, label, color, is_waiting in intervals:
+        label_to_color.setdefault((label, is_waiting), color)
 
     # Plot each interval on the appropriate fixed row
     for start, end, label, color, is_waiting in intervals:
@@ -478,13 +534,16 @@ def plot_gantt_single_permit(
             hatch=hatch,
         )
 
-    # Build legend in canonical order, only for labels that appear in this permit
+    # Build legend in canonical order, only for labels that appear in this permit.
     legend_handles = []
-    for label, is_waiting in legend_order:
-        key = (label, is_waiting)
-        if key not in label_to_color:
-            continue
-        color = label_to_color[key]
+    legend_items = sorted(
+        label_to_color.items(),
+        key=lambda item: (
+            legend_order_index.get(item[0][0], len(legend_order)),
+            item[0][0],
+        ),
+    )
+    for (label, is_waiting), color in legend_items:
         hatch = "///" if is_waiting else None
         alpha = 0.6 if is_waiting else 0.9
         patch = mpatches.Patch(
@@ -496,7 +555,8 @@ def plot_gantt_single_permit(
             label=label,
         )
         legend_handles.append(patch)
-    ax.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=15)
+    if legend_handles:
+        ax.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=15)
 
     ax.set_yticks(y_positions)
     ax.set_yticklabels(row_labels, fontsize=16)
@@ -517,6 +577,7 @@ def plot_gantt_three_random_permits(
     random_seed: Optional[int] = None,
     figsize=(14, 8),
     color_map: Optional[dict] = None,
+    color_option: str = "option_1",
 ):
     """
     Plot a Gantt chart showing multiple random permits in the same chart.
@@ -528,6 +589,7 @@ def plot_gantt_three_random_permits(
         random_seed: Optional seed for reproducible random choice
         figsize: Figure size tuple
         color_map: Optional dict of interval-label -> color overrides.
+        color_option: Name of base Gantt palette ("option_1" or "option_2").
     """
     from permit_simulation import Segment
 
@@ -592,7 +654,11 @@ def plot_gantt_three_random_permits(
         return (_order_index.get(lab, len(_legend_label_order)), lab)
 
     for perm_idx, permit in enumerate(selected):
-        intervals = _gantt_intervals_from_permit(permit, color_map=color_map)
+        intervals = _gantt_intervals_from_permit(
+            permit,
+            color_map=color_map,
+            color_option=color_option,
+        )
         y_offset = perm_idx * n_rows_per_permit
 
         for start, end, label, color, is_waiting in intervals:
@@ -653,6 +719,7 @@ def plot_gantt_one_random_permit_segment(
     random_seed: Optional[int] = None,
     figsize=(14, 5),
     color_map: Optional[dict] = None,
+    color_option: str = "option_1",
 ):
     """
     Plot a Gantt chart for one random permit in the given segment.
@@ -664,6 +731,7 @@ def plot_gantt_one_random_permit_segment(
         random_seed: Optional seed for reproducible random choice
         figsize: Figure size tuple
         color_map: Optional dict of interval-label -> color overrides.
+        color_option: Name of base Gantt palette ("option_1" or "option_2").
     """
     from permit_simulation import Segment
     try:
@@ -676,7 +744,12 @@ def plot_gantt_one_random_permit_segment(
         return None, None
     rng = np.random.default_rng(random_seed)
     permit = rng.choice(segment_permits)
-    return plot_gantt_single_permit(permit, figsize=figsize, color_map=color_map)
+    return plot_gantt_single_permit(
+        permit,
+        figsize=figsize,
+        color_map=color_map,
+        color_option=color_option,
+    )
 
 
 def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxplot=True):
