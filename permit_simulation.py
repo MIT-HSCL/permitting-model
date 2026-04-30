@@ -34,6 +34,21 @@ class StaffCaseloadPool:
         self._loads = [0] * self.staff_count
         self._waiters: list[tuple[int, int, simpy.Event]] = []
         self._seq = 0
+        self._load_history: list[tuple[float, int]] = [(0.0, 0)]
+
+    @property
+    def total_capacity(self) -> int:
+        return self.staff_count * self.caseload_per_staff
+
+    def _record_load(self):
+        total_load = int(sum(self._loads))
+        now = float(self.env.now)
+        if self._load_history and self._load_history[-1][0] == now:
+            self._load_history[-1] = (now, total_load)
+        elif self._load_history and self._load_history[-1][1] == total_load:
+            return
+        else:
+            self._load_history.append((now, total_load))
 
     def _next_available_staff(self) -> Optional[int]:
         available = [idx for idx, load in enumerate(self._loads) if load < self.caseload_per_staff]
@@ -53,6 +68,7 @@ class StaffCaseloadPool:
                 staff_id = self._next_available_staff()
             if staff_id is not None:
                 self._loads[staff_id] += 1
+                self._record_load()
                 return staff_id
 
             evt = self.env.event()
@@ -62,10 +78,34 @@ class StaffCaseloadPool:
 
     def release(self, staff_id: int):
         self._loads[staff_id] = max(0, self._loads[staff_id] - 1)
+        self._record_load()
         if self._waiters:
             _, _, evt = heapq.heappop(self._waiters)
             if not evt.triggered:
                 evt.succeed()
+
+    def utilization_series(self, days: float, step: float = 1.0) -> Dict[str, List[float]]:
+        """Piecewise-constant utilization sampled from day 0 to `days`."""
+        end_day = max(0.0, float(days))
+        step = max(1e-6, float(step))
+        x = [float(v) for v in np.arange(0.0, end_day + 1e-12, step)]
+        if not x:
+            x = [0.0]
+        if x[-1] < end_day:
+            x.append(end_day)
+        if self.total_capacity <= 0:
+            return {"days": x, "utilization": [0.0 for _ in x]}
+
+        history = self._load_history if self._load_history else [(0.0, 0)]
+        y: list[float] = []
+        h_idx = 0
+        current_load = history[0][1]
+        for day in x:
+            while h_idx + 1 < len(history) and history[h_idx + 1][0] <= day:
+                h_idx += 1
+                current_load = history[h_idx][1]
+            y.append(current_load / self.total_capacity)
+        return {"days": x, "utilization": y}
 
 
 @dataclass
@@ -165,22 +205,20 @@ def epa_debris_calendar_metrics(permits: Iterable[Permit]) -> Dict[str, Optional
 
 
 def _permit_county_review_days(p: Permit) -> float:
-    """Cumulative days in county-led review queues + review service (planning, PW, fire, zoning, agency referral)."""
+    """Cumulative days of county-led review service time only (no queue waiting).
+
+    Includes planning, Public Works, fire, special zoning, and agency referral processing.
+    """
     t = (
-        p.planning_total_waiting
-        + p.planning_initial_service
+        p.planning_initial_service
         + p.planning_recheck_service
-        + p.public_works_total_waiting
         + p.public_works_initial_service
         + p.public_works_recheck_service
-        + p.fire_review_total_waiting
         + p.fire_initial_service
         + p.fire_recheck_service
     )
     if p.zoning_end is not None and p.zoning_start is not None:
         t += p.zoning_end - p.zoning_start
-    if p.agency_referral_request is not None and p.agency_referral_service_start is not None:
-        t += p.agency_referral_service_start - p.agency_referral_request
     if p.agency_referral_end is not None and p.agency_referral_service_start is not None:
         t += p.agency_referral_end - p.agency_referral_service_start
     return t
@@ -234,11 +272,11 @@ class PermitSimulation:
         review_duration_multipliers: Optional[Dict[str, float]] = None,
         pre_application_distribution: str = "baseline",
         planning_staff_count: int = 20,
-        planning_caseload_per_staff: float = 7.5,
-        public_works_staff_count: int = 40,
-        public_works_caseload_per_staff: float = 7.5,
-        fire_staff_count: int = 100,
-        fire_caseload_per_staff: float = 1.0,
+        planning_caseload_per_staff: float = 7,
+        public_works_staff_count: int = 30,
+        public_works_caseload_per_staff: float = 7,
+        fire_staff_count: int = 10,
+        fire_caseload_per_staff: float = 7,
 
     ):
         """
@@ -791,11 +829,11 @@ class PermitSimulation:
                     # Quick review: ~1 day (normal distribution around 1 day)
                     duration_days = self.sample_stage_duration("fire", 1, 0.2)
                 else:
-                    # Detailed review: ~13 days (normal distribution around 13 days)
+                    # Detailed review: ~8 days (normal distribution around 8 days)
                     duration_days = self.sample_stage_duration("fire", 8, 2)
             else:
                 # Recheck uses shorter time
-                duration_days = self.sample_stage_duration("fire", 2, 0.5)
+                duration_days = self.sample_stage_duration("fire", 1, 0.5)
             yield self.env.timeout(duration_days)
 
             service_end_time = self.env.now
@@ -818,8 +856,8 @@ class PermitSimulation:
                     no_evt.succeed()
         
         if permit.fire_rechecks == 0:
-            # 25% approved, 75% need re-check
-            approved = random.random() < 0.25
+            # 50% approved, 50% need re-check
+            approved = random.random() < 0.4
             is_initial = False
         else:
             # 95% approved, 5% need re-check if has already been rechecked
@@ -880,7 +918,7 @@ class PermitSimulation:
         
         yield plan_process
         
-        # Planning department (skipped for segments 5&6) - loop until approved
+        # Planning department - loop until approved
         yield self.env.process(self.planning_until_approved(permit))
         
         # Special zoning review (for subset of permits)
@@ -918,7 +956,7 @@ class PermitSimulation:
         # Then combined pre-application activities (authorization + plan preparation)
         yield self.env.process(self.pre_application_activities(permit))
         
-        # Planning department (skipped for segments 5&6) - loop until approved
+        # Planning department - loop until approved
         yield self.env.process(self.planning_until_approved(permit))
         
         # Special zoning review
@@ -1158,4 +1196,16 @@ class PermitSimulation:
         }
 
         return stats
+
+    def get_staff_utilization_over_time(self, days: float, step: float = 1.0) -> Dict[str, List[float]]:
+        """Sampled staff utilization (load / capacity) for planning, public works, and fire."""
+        planning = self.planning_staff_pool.utilization_series(days=days, step=step)
+        public_works = self.public_works_staff_pool.utilization_series(days=days, step=step)
+        fire = self.fire_staff_pool.utilization_series(days=days, step=step)
+        return {
+            "days": planning["days"],
+            "planning": planning["utilization"],
+            "public_works": public_works["utilization"],
+            "fire": fire["utilization"],
+        }
 

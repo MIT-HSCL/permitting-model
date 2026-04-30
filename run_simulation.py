@@ -6,13 +6,24 @@ import simpy
 from permit_simulation import PermitSimulation
 import json
 from datetime import datetime
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import Any, Optional
+
+
+def _env_clock(env) -> float:
+    """Current simulation time. SimPy 4+ uses `env.now` (float); avoid `env.now()`."""
+    t = env.now
+    if callable(t):
+        return float(t())
+    return float(t)
 
 
 def run_simulation(
     num_permits: int = 100,
     simulation_duration: float = None,
     random_seed: int = 42,
-    inter_arrival_time: float = 1.0,  # days between permit arrivals
+    inter_arrival_time: float = 0.0,  # days between permit arrivals
     sequential: str = "standard",
     ai_review: str = "none",
     pct_pre_approved: float = 0.02,
@@ -121,9 +132,11 @@ def run_multiple_simulations(
     num_permits: int = 100,
     simulation_duration: float | None = None,
     base_seed: int = 42,
-    inter_arrival_time: float = 1.0,
+    inter_arrival_time: float = 0.0,
     scenario_params_list: list[dict] | None = None,
     collect_permits: bool = False,
+    collect_average_staff_utilization: bool = False,
+    utilization_step: float = 0.05,
 ):
     """
     Run the simulation many times, optionally for multiple scenarios.
@@ -140,6 +153,10 @@ def run_multiple_simulations(
               - any extra keyword args for run_simulation
                 (e.g. "sequential", "ai_review", pct_* parameters).
         collect_permits: If True, also return completed permits for each run.
+        collect_average_staff_utilization: If True, also return the mean
+            planning / public works / fire utilization time series across runs
+            (one series per scenario group; see Returns).
+        utilization_step: Day spacing when sampling utilization (smaller = finer).
 
     Example scenario list:
         [
@@ -156,7 +173,8 @@ def run_multiple_simulations(
         ]
 
     Returns:
-        List of result dicts, each with:
+        If collect_average_staff_utilization is False:
+          List of result dicts, each with:
             {
               "run_index": int,
               "seed": int,
@@ -166,9 +184,22 @@ def run_multiple_simulations(
               "permits": list,   # ONLY present if collect_permits=True;
                                  # list of completed Permit objects for this run
             }
+        If collect_average_staff_utilization is True:
+          Tuple (results, average_staff_utilization_by_scenario) where
+          average_staff_utilization_by_scenario maps scenario name -> dict:
+            {
+              "days": list[float],
+              "planning": list[float],
+              "public_works": list[float],
+              "fire": list[float],
+              "n_runs": int,
+              "max_day": int,
+            }
     """
     if scenario_params_list is None:
         scenario_params_list = [{"name": "default"}]
+
+    util_sims_by_scenario: dict[str, list[PermitSimulation]] = {}
 
     results: list[dict] = []
     for run_index in range(n_runs):
@@ -195,8 +226,80 @@ def run_multiple_simulations(
             if collect_permits:
                 entry["permits"] = list(sim.completed_permits)
             results.append(entry)
+            if collect_average_staff_utilization:
+                util_sims_by_scenario.setdefault(scenario_name, []).append(sim)
+
+    if collect_average_staff_utilization:
+        average_staff_utilization_by_scenario: dict[str, dict[str, Any]] = {}
+        for scenario_name, sims in util_sims_by_scenario.items():
+            if not sims:
+                continue
+            max_day = max(int(_env_clock(s.env)) for s in sims)
+            series_list = [
+                s.get_staff_utilization_over_time(days=max_day, step=utilization_step) for s in sims
+            ]
+            days = series_list[0]["days"]
+            planning = np.mean([u["planning"] for u in series_list], axis=0)
+            public_works = np.mean([u["public_works"] for u in series_list], axis=0)
+            fire = np.mean([u["fire"] for u in series_list], axis=0)
+            average_staff_utilization_by_scenario[scenario_name] = {
+                "days": days,
+                "planning": planning.tolist(),
+                "public_works": public_works.tolist(),
+                "fire": fire.tolist(),
+                "n_runs": len(sims),
+                "max_day": max_day,
+            }
+        return results, average_staff_utilization_by_scenario
 
     return results
+
+
+def plot_staff_utilization_series(
+    util: dict[str, Any],
+    *,
+    as_percent: bool = True,
+    title: str = "Mean staff utilization over time (multi-run average)",
+    xlim: Optional[tuple[float, float]] = None,
+    ylim: Optional[tuple[float, float]] = None,
+) -> None:
+    """Plot planning / fire / public works utilization from a util dict (e.g. multi-run mean)."""
+    days = util["days"]
+    scale = 100.0 if as_percent else 1.0
+    ylabel = "Utilization (%)" if as_percent else "Utilization (load / capacity)"
+    ymax = 105.0 if as_percent else 1.05
+    plt.figure(figsize=(12, 6))
+    plt.plot(days, [v * scale for v in util["planning"]], label="Planning", linewidth=2)
+    plt.plot(days, [v * scale for v in util["fire"]], label="Fire", linewidth=2)
+    plt.plot(days, [v * scale for v in util["public_works"]], label="Public Works", linewidth=2)
+    if ylim is None:
+        plt.ylim(0, ymax)
+    else:
+        plt.ylim(*ylim)
+    if xlim is None:
+        plt.xlim(0, max(days) if days else 0)
+    else:
+        plt.xlim(*xlim)
+    plt.xlabel("Day")
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_staff_utilization(
+    sim: PermitSimulation,
+    days: float,
+    step: float = 1.0,
+    as_percent: bool = True,
+    xlim: Optional[tuple[float, float]] = None,
+    ylim: Optional[tuple[float, float]] = None,
+) -> None:
+    """Plot planning, fire, and public works utilization for a single completed simulation."""
+    u = sim.get_staff_utilization_over_time(days=days, step=step)
+    plot_staff_utilization_series(u, as_percent=as_percent, title="Staff utilization over time", xlim=xlim, ylim=ylim)
 
 
 def print_statistics(stats: dict):
