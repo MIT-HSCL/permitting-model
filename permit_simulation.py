@@ -908,7 +908,11 @@ class PermitSimulation:
         evt.succeed()
     
     def permit_process(self, permit: Permit):
-        """Main process flow for a single permit."""
+        """Main process flow for a single permit.
+
+        Debris removal runs alongside pre-application and reviews, but the permit
+        is not marked ready for construction until debris removal completes.
+        """
         # Two parallel paths from fire event:
         # Path 1: Debris removal
         debris_process = self.env.process(self.debris_removal_path(permit))
@@ -937,7 +941,10 @@ class PermitSimulation:
         # Wait for all parallel processes to complete
         if parallel_processes:
             yield simpy.AllOf(self.env, parallel_processes)
-        
+
+        # Same readiness rule as parallel flow: debris removal must finish before ready-for-construction
+        yield debris_process
+
         # Ready for construction
         permit.ready_for_construction = self.env.now
         self.completed_permits.append(permit)
