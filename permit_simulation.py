@@ -415,9 +415,23 @@ class PermitSimulation:
         else:  # self_cert
             return Segment.SELF_CERT_LIKE if is_like_for_like else Segment.SELF_CERT_NON_LIKE
     
-    def sample_normal(self, mean: float, std: float) -> float:
-        """Sample from normal distribution, ensuring non-negative."""
-        return max(0, np.random.normal(mean, std))
+    def sample_gamma(self, shape: float, scale: float) -> float:
+        """Sample from a gamma distribution with explicit shape/scale parameters."""
+        shape = max(float(shape), 0.0)
+        scale = max(float(scale), 0.0)
+        if shape == 0.0 or scale == 0.0:
+            return 0.0
+        return float(np.random.gamma(shape=shape, scale=scale))
+
+    def _gamma_shape_scale_from_mean_std(self, mean: float, std: float) -> tuple[float, float]:
+        """Convert mean/std to gamma shape/scale."""
+        mean = max(float(mean), 0.0)
+        std = max(float(std), 0.0)
+        if mean == 0.0 or std == 0.0:
+            return 0.0, 0.0
+        shape = (mean / std) ** 2
+        scale = (std ** 2) / mean
+        return shape, scale
     
     def sample_lognormal(self, median: float, sigma: float) -> float:
         """Sample from lognormal distribution with given median and sigma."""
@@ -459,12 +473,6 @@ class PermitSimulation:
 
         return max(0.0, float(value))
 
-    def sample_stage_duration(self, stage: str, mean: float, std: float) -> float:
-        """Sample duration for a stage using configured family."""
-        family = self.review_duration_families.get(stage, "normal")
-        multiplier = self.review_duration_multipliers.get(stage, 1.0)
-        return self.sample_duration_family(family, mean * multiplier, std * multiplier)
-
     def sample_pre_application_duration(self, permit: Permit) -> float:
         """Sample pre-application duration using configured distribution choice."""
         dist = self.pre_application_distribution
@@ -496,8 +504,9 @@ class PermitSimulation:
             permit.debris_removal_service_start = self.env.now
             permit.epa_debris_service_start = self.env.now
             permit.epa_debris_total_waiting += (permit.epa_debris_service_start - request_time)
-            # Uniform: 2 or 3 days, each with 50% probability
-            duration = self.sample_normal(1, 0.5)
+            shape = 2
+            scale = 0.5
+            duration = self.sample_gamma(shape, scale)
             yield self.env.timeout(duration)
         permit.epa_debris_end = self.env.now
         # Note: debris_removal_end will be set after USACE completes
@@ -511,8 +520,9 @@ class PermitSimulation:
             yield request
             permit.usace_debris_service_start = self.env.now
             permit.usace_debris_total_waiting += (permit.usace_debris_service_start - request_time)
-            # Uniform: 2 or 3 days, each with 50% probability
-            duration = self.sample_uniform_days()
+            shape = 2.5
+            scale = 1
+            duration = self.sample_gamma(shape, scale)
             yield self.env.timeout(duration)
         permit.usace_debris_end = self.env.now
         # Set end time after both EPA and USACE phases complete
@@ -566,17 +576,27 @@ class PermitSimulation:
             self._active_reviews[permit.permit_id] = self._active_reviews.get(permit.permit_id, 0) + 1
 
             if is_initial:
+                planning_multiplier = self.review_duration_multipliers.get("planning", 1.0)
                 if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
-                    duration_days = self.sample_stage_duration("planning", 9, 1)
+                    shape = 9
+                    scale = 1
+                    duration_days = planning_multiplier*self.sample_gamma(shape, scale)
                 else:  # like-for-like
-                    duration_days = self.sample_stage_duration("planning", 5, 0.5)
+                    shape = 5
+                    scale = 1
+                    duration_days = planning_multiplier*self.sample_gamma(shape, scale)
                 if self.ai_review == "initial_check":
                     duration_days = duration_days * 0.7
                 elif self.ai_review == "full_review":
                     duration_days = duration_days * 0.1
             else:
                 # Recheck uses shorter time
-                duration_days = self.sample_stage_duration("planning", 1, 0.5)
+                planning_multiplier = self.review_duration_multipliers.get("planning", 1.0)
+                shape, scale = self._gamma_shape_scale_from_mean_std(
+                    1 * planning_multiplier,
+                    0.5 * planning_multiplier,
+                )
+                duration_days = self.sample_gamma(shape, scale)
                 if self.ai_review == "full_review":
                     duration_days = duration_days * 0.1
 
@@ -689,26 +709,27 @@ class PermitSimulation:
                 permit.public_works_initial_waiting += (service_start_time - request_time)
             else:
                 permit.public_works_recheck_waiting += (service_start_time - request_time)
-            duration_days = self.sample_stage_duration("public_works", 8, 2)
-            duration_days_pre_approved = self.sample_stage_duration("public_works", 1, 0.5)
-            duration_days_recheck = self.sample_stage_duration("public_works", 1, 0.5)
+            public_works_multiplier = self.review_duration_multipliers.get("public_works", 1.0)
+            duration_days = self.sample_gamma(4, 2)
+            duration_days_pre_approved = self.sample_gamma(4, 0.25)
+            duration_days_recheck = self.sample_gamma(4, 0.25)
             if is_initial:
                 if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE, Segment.SELF_CERT_LIKE, Segment.SELF_CERT_NON_LIKE]:
                     if self.ai_review == "initial_check":
                         duration_days_pre_approved = duration_days_pre_approved * 0.7
                     elif self.ai_review == "full_review":
                         duration_days_pre_approved = duration_days_pre_approved * 0.1
-                    yield self.env.timeout(duration_days_pre_approved)
+                    yield self.env.timeout(public_works_multiplier*duration_days_pre_approved)
                 else:
                     if self.ai_review == "initial_check":
                         duration_days = duration_days * 0.7
                     elif self.ai_review == "full_review":
                         duration_days = duration_days * 0.1
-                    yield self.env.timeout(duration_days)
+                    yield self.env.timeout(public_works_multiplier*duration_days)
             else:
                 if self.ai_review == "full_review":
                     duration_days_recheck = duration_days_recheck * 0.1
-                yield self.env.timeout(duration_days_recheck)
+                yield self.env.timeout(public_works_multiplier*duration_days_recheck)
 
             service_end_time = self.env.now
             if is_initial:
@@ -825,16 +846,16 @@ class PermitSimulation:
                 permit.fire_recheck_waiting += (service_start_time - request_time)
             # 70% take ~1 day, 30% take ~13 days (for initial)
             if is_initial:
+                fire_multiplier = self.review_duration_multipliers.get("fire", 1.0)
                 if random.random() < 0.70:
-                    # Quick review: ~1 day (normal distribution around 1 day)
-                    duration_days = self.sample_stage_duration("fire", 1, 0.2)
+                    duration_days = self.sample_gamma(4, 0.25)
                 else:
-                    # Detailed review: ~8 days (normal distribution around 8 days)
-                    duration_days = self.sample_stage_duration("fire", 8, 2)
+                    duration_days = self.sample_gamma(6, 1.3)
+                yield self.env.timeout(fire_multiplier * duration_days)
             else:
                 # Recheck uses shorter time
-                duration_days = self.sample_stage_duration("fire", 1, 0.5)
-            yield self.env.timeout(duration_days)
+                duration_days = self.sample_gamma(5, 0.2)
+                yield self.env.timeout(duration_days)
 
             service_end_time = self.env.now
             if is_initial:
@@ -856,7 +877,7 @@ class PermitSimulation:
                     no_evt.succeed()
         
         if permit.fire_rechecks == 0:
-            # 50% approved, 50% need re-check
+            # 54% approved, 60% need re-check
             approved = random.random() < 0.4
             is_initial = False
         else:
@@ -896,7 +917,7 @@ class PermitSimulation:
             yield no_evt
 
         start_time = self.env.now
-        duration_days = self.sample_normal(45, 20)
+        duration_days = self.sample_gamma(5, 9)
         permit.applicant_revision_count += 1
         yield self.env.timeout(duration_days)
         end_time = self.env.now
