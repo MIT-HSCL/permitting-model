@@ -9,7 +9,7 @@ import numpy as np
 import heapq
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 import statistics
 from scipy.stats import lognorm
 
@@ -258,6 +258,16 @@ def usace_debris_calendar_metrics(permits: Iterable[Permit]) -> Dict[str, Option
 
 class PermitSimulation:
     """Main simulation class for the permitting process."""
+    USACE_CREW_SCHEDULE: List[Tuple[float, int]] = [
+        (15.0, 15),
+        (30.0, 30),
+        (60.0, 60),
+        (90.0, 90),
+        (120.0, 116),
+        (150.0, 90),
+        (180.0, 60),
+        (210.0, 30),
+    ]
     
     def __init__(
         self,
@@ -370,7 +380,11 @@ class PermitSimulation:
 
         # Resource pools
         self.epa_debris_servers = simpy.Resource(env, capacity=160)
-        self.usace_debris_servers = simpy.Resource(env, capacity=116)
+        # SimPy Resource requires capacity > 0 at construction time.
+        # We still model "no crews available" before the first schedule day
+        # by delaying USACE starts until that first day.
+        self.usace_debris_servers = simpy.Resource(env, capacity=1)
+        self.env.process(self._usace_capacity_scheduler())
         
         # Statistics
         self.completed_permits: List[Permit] = []
@@ -384,6 +398,21 @@ class PermitSimulation:
         self._revision_events: Dict[int, simpy.Event] = {}
         self._active_reviews: Dict[int, int] = {}
         self._no_active_events: Dict[int, simpy.Event] = {}
+
+    def _set_usace_capacity(self, new_capacity: int) -> None:
+        """Update USACE debris server capacity and wake queued requests."""
+        self.usace_debris_servers._capacity = max(0, int(new_capacity))
+        self.usace_debris_servers._trigger_put(None)
+
+    def _usace_capacity_scheduler(self):
+        """Apply scheduled USACE crew capacity changes over simulation time."""
+        current_time = 0.0
+        for day, crews in self.USACE_CREW_SCHEDULE:
+            wait = max(0.0, float(day) - current_time)
+            if wait > 0:
+                yield self.env.timeout(wait)
+            self._set_usace_capacity(crews)
+            current_time = float(day)
         
     def sample_segment(self) -> Segment:
         """
@@ -476,19 +505,23 @@ class PermitSimulation:
     def sample_pre_application_duration(self, permit: Permit) -> float:
         """Sample pre-application duration using configured distribution choice."""
         dist = self.pre_application_distribution
+        base_duration = None
         if dist == "baseline":
-            if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
-                return self.sample_lognormal(249, 0.53)
-            return max(0, lognorm.rvs(0.896, 0, 456))
-        if dist == "lognormal_180":
-            return self.sample_lognormal(180, 0.53)
-        if dist == "lognormal_60":
-            return self.sample_lognormal(60, 0.53)
-        if dist == "poisson_10":
-            return max(0.0, float(np.random.poisson(10)))
-        if dist == "lognormal_10":
-            return self.sample_lognormal(10, 0.53)
-        raise ValueError(f"Unsupported pre_application_distribution: {dist}")
+            base_duration = max(0, lognorm.rvs(0.896, 0, 456))
+        elif dist == "lognormal_180":
+            base_duration = self.sample_lognormal(180, 0.53)
+        elif dist == "lognormal_60":
+            base_duration = self.sample_lognormal(60, 0.53)
+        elif dist == "poisson_10":
+            base_duration = max(0.0, float(np.random.poisson(10)))
+        elif dist == "lognormal_10":
+            base_duration = self.sample_lognormal(10, 0.53)
+        else:
+            raise ValueError(f"Unsupported pre_application_distribution: {dist}")
+
+        if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
+            return 0.5 * float(base_duration)
+        return float(base_duration)
     
     def sample_uniform_days(self) -> float:
         """Sample uniform: 2 or 3 days, each with 50% probability."""
@@ -504,7 +537,7 @@ class PermitSimulation:
             permit.debris_removal_service_start = self.env.now
             permit.epa_debris_service_start = self.env.now
             permit.epa_debris_total_waiting += (permit.epa_debris_service_start - request_time)
-            duration = self.sample_gamma(2, 1)
+            duration = self.sample_gamma(1.5, 1)
             yield self.env.timeout(duration)
         permit.epa_debris_end = self.env.now
         # Note: debris_removal_end will be set after USACE completes
@@ -512,13 +545,16 @@ class PermitSimulation:
     def usace_debris_removal(self, permit: Permit):
         """USACE Debris Removal (Phase 2)."""
         # USACE follows immediately after EPA
+        first_crew_day = float(self.USACE_CREW_SCHEDULE[0][0]) if self.USACE_CREW_SCHEDULE else 0.0
+        if self.env.now < first_crew_day:
+            yield self.env.timeout(first_crew_day - self.env.now)
         permit.usace_debris_request = self.env.now
         request_time = self.env.now
         with self.usace_debris_servers.request() as request:
             yield request
             permit.usace_debris_service_start = self.env.now
             permit.usace_debris_total_waiting += (permit.usace_debris_service_start - request_time)
-            duration = self.sample_gamma(2.5, 1)
+            duration = self.sample_gamma(2, 1)
             yield self.env.timeout(duration)
         permit.usace_debris_end = self.env.now
         # Set end time after both EPA and USACE phases complete
@@ -574,13 +610,9 @@ class PermitSimulation:
             if is_initial:
                 planning_multiplier = self.review_duration_multipliers.get("planning", 1.0)
                 if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
-                    shape = 9
-                    scale = 1
-                    duration_days = planning_multiplier*self.sample_gamma(shape, scale)
+                    duration_days = planning_multiplier*self.sample_gamma(9, 1)
                 else:  # like-for-like
-                    shape = 5
-                    scale = 1
-                    duration_days = planning_multiplier*self.sample_gamma(shape, scale)
+                    duration_days = planning_multiplier*self.sample_gamma(5, 1)
                 if self.ai_review == "initial_check":
                     duration_days = duration_days * 0.7
                 elif self.ai_review == "full_review":
@@ -588,11 +620,7 @@ class PermitSimulation:
             else:
                 # Recheck uses shorter time
                 planning_multiplier = self.review_duration_multipliers.get("planning", 1.0)
-                shape, scale = self._gamma_shape_scale_from_mean_std(
-                    1 * planning_multiplier,
-                    0.5 * planning_multiplier,
-                )
-                duration_days = self.sample_gamma(shape, scale)
+                duration_days = self.sample_gamma(4, 0.25)
                 if self.ai_review == "full_review":
                     duration_days = duration_days * 0.1
 
@@ -847,10 +875,16 @@ class PermitSimulation:
                     duration_days = self.sample_gamma(4, 0.25)
                 else:
                     duration_days = self.sample_gamma(6, 1.3)
+                if self.ai_review == "initial_check":
+                    duration_days = duration_days * 0.7
+                elif self.ai_review == "full_review":
+                    duration_days = duration_days * 0.1
                 yield self.env.timeout(fire_multiplier * duration_days)
             else:
                 # Recheck uses shorter time
                 duration_days = self.sample_gamma(5, 0.2)
+                if self.ai_review == "full_review":
+                    duration_days = duration_days * 0.1
                 yield self.env.timeout(duration_days)
 
             service_end_time = self.env.now
