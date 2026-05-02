@@ -504,9 +504,7 @@ class PermitSimulation:
             permit.debris_removal_service_start = self.env.now
             permit.epa_debris_service_start = self.env.now
             permit.epa_debris_total_waiting += (permit.epa_debris_service_start - request_time)
-            shape = 2
-            scale = 0.5
-            duration = self.sample_gamma(shape, scale)
+            duration = self.sample_gamma(2, 1)
             yield self.env.timeout(duration)
         permit.epa_debris_end = self.env.now
         # Note: debris_removal_end will be set after USACE completes
@@ -520,9 +518,7 @@ class PermitSimulation:
             yield request
             permit.usace_debris_service_start = self.env.now
             permit.usace_debris_total_waiting += (permit.usace_debris_service_start - request_time)
-            shape = 2.5
-            scale = 1
-            duration = self.sample_gamma(shape, scale)
+            duration = self.sample_gamma(2.5, 1)
             yield self.env.timeout(duration)
         permit.usace_debris_end = self.env.now
         # Set end time after both EPA and USACE phases complete
