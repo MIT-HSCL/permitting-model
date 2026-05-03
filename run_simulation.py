@@ -8,7 +8,7 @@ import json
 from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 
 def _env_clock(env) -> float:
@@ -25,10 +25,11 @@ def run_simulation(
     random_seed: int = 42,
     sequential: str = "standard",
     ai_review: str = "none",
-    pct_pre_approved: float = 0.02,
-    pct_custom: float = 0.90,
-    pct_self_cert: float = 0.08,
-    pct_like_for_like: float = 0.80,
+    permit_mix: Literal["all_custom_non_like_for_like", "la", "balanced"] = "la",
+    pct_pre_approved: float | None = None,
+    pct_custom: float | None = None,
+    pct_self_cert: float | None = None,
+    pct_like_for_like: float | None = None,
     review_duration_families: dict[str, str] | None = None,
     review_duration_multipliers: dict[str, float] | None = None,
     pre_application_distribution: str = "baseline",
@@ -47,10 +48,12 @@ def run_simulation(
         simulation_duration: Maximum simulation time in days (if None, runs until all permits complete)
         random_seed: Random seed for reproducibility
         sequential: Processing mode: \"standard\", \"parallel\", or \"sequential\".
-        pct_pre_approved: Fraction of permits that are pre-approved plans (0–1).
-        pct_custom: Fraction of permits that are custom builds (0–1).
-        pct_self_cert: Fraction of permits that are self-certification (0–1).
-        pct_like_for_like: Fraction of permits that are like-for-like (0–1).
+        permit_mix: Preset permit mix. One of:
+            all_custom_non_like_for_like, la, balanced.
+        pct_pre_approved: Optional manual override for pre-approved plan share (0–1).
+        pct_custom: Optional manual override for custom plan share (0–1).
+        pct_self_cert: Optional manual override for self-certification share (0–1).
+        pct_like_for_like: Optional manual override for like-for-like share (0–1).
         review_duration_families: Optional map for review stages (planning/public_works/fire)
             to sampling family (normal/lognormal/triangular/uniform).
         review_duration_multipliers: Optional map of duration multipliers by stage.
@@ -70,6 +73,7 @@ def run_simulation(
         env,
         random_seed=random_seed,
         ai_review=ai_review,
+        permit_mix=permit_mix,
         pct_pre_approved=pct_pre_approved,
         pct_custom=pct_custom,
         pct_self_cert=pct_self_cert,
@@ -161,10 +165,7 @@ def run_multiple_simulations(
             {
                 "name": "balanced_segments",
                 "sequential": "standard",
-                "pct_pre_approved": 0.5,
-                "pct_custom": 0.25,
-                "pct_self_cert": 0.25,
-                "pct_like_for_like": 0.8,
+                "permit_mix": "balanced",
             },
         ]
 
@@ -259,27 +260,39 @@ def plot_staff_utilization_series(
     ylim: Optional[tuple[float, float]] = None,
 ) -> None:
     """Plot planning / fire / public works utilization from a util dict (e.g. multi-run mean)."""
+    title_fontsize = 18
+    label_fontsize = 16
+    tick_fontsize = 14
+    legend_fontsize = 14
+
     days = util["days"]
+    months = [d / 30.0 for d in days]
     scale = 100.0 if as_percent else 1.0
     ylabel = "Utilization (%)" if as_percent else "Utilization (load / capacity)"
     ymax = 105.0 if as_percent else 1.05
     plt.figure(figsize=(12, 6))
-    plt.plot(days, [v * scale for v in util["planning"]], label="Planning", linewidth=2)
-    plt.plot(days, [v * scale for v in util["fire"]], label="Fire", linewidth=2)
-    plt.plot(days, [v * scale for v in util["public_works"]], label="Public Works", linewidth=2)
+    plt.plot(months, [v * scale for v in util["planning"]], label="Planning", linewidth=2)
+    plt.plot(months, [v * scale for v in util["fire"]], label="Fire", linewidth=2)
+    plt.plot(months, [v * scale for v in util["public_works"]], label="Public Works", linewidth=2)
     if ylim is None:
         plt.ylim(0, ymax)
     else:
         plt.ylim(*ylim)
     if xlim is None:
-        plt.xlim(0, max(days) if days else 0)
+        plt.xlim(0, max(months) if months else 0)
     else:
-        plt.xlim(*xlim)
-    plt.xlabel("Day")
-    plt.ylabel(ylabel)
-    plt.title(title)
+        # Backward-compatible: if caller passes day-scale limits, convert to months.
+        x0, x1 = xlim
+        if x1 > 120:  # heuristic: old day-scale limits are typically much larger.
+            x0, x1 = x0 / 30.0, x1 / 30.0
+        plt.xlim(x0, x1)
+    plt.xlabel("Time since disaster (months)", fontsize=label_fontsize)
+    plt.ylabel(ylabel, fontsize=label_fontsize)
+    plt.title(title, fontsize=title_fontsize)
+    plt.xticks(fontsize=tick_fontsize)
+    plt.yticks(fontsize=tick_fontsize)
     plt.grid(True, alpha=0.3)
-    plt.legend()
+    plt.legend(fontsize=legend_fontsize)
     plt.tight_layout()
     plt.show()
 

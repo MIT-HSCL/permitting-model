@@ -9,7 +9,7 @@ import numpy as np
 import heapq
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Literal, Optional, Tuple
 import statistics
 from scipy.stats import lognorm
 
@@ -258,6 +258,26 @@ def usace_debris_calendar_metrics(permits: Iterable[Permit]) -> Dict[str, Option
 
 class PermitSimulation:
     """Main simulation class for the permitting process."""
+    PERMIT_MIX_PRESETS: Dict[str, Dict[str, float]] = {
+        "all_custom_non_like_for_like": {
+            "pct_pre_approved": 0.0,
+            "pct_custom": 1.0,
+            "pct_self_cert": 0.0,
+            "pct_like_for_like": 0.0,
+        },
+        "la": {
+            "pct_pre_approved": 0.018,
+            "pct_custom": 0.901,
+            "pct_self_cert": 0.081,
+            "pct_like_for_like": 0.803,
+        },
+        "balanced": {
+            "pct_pre_approved": 0.5,
+            "pct_custom": 0.25,
+            "pct_self_cert": 0.25,
+            "pct_like_for_like": 0.8,
+        },
+    }
     USACE_CREW_SCHEDULE: List[Tuple[float, int]] = [
         (15.0, 15),
         (30.0, 30),
@@ -274,10 +294,11 @@ class PermitSimulation:
         env: simpy.Environment,
         random_seed: int = 42,
         ai_review: str = "none",
-        pct_pre_approved: float = 0.02,
-        pct_custom: float = 0.90,
-        pct_self_cert: float = 0.08,
-        pct_like_for_like: float = 0.80,
+        permit_mix: Literal["all_custom_non_like_for_like", "la", "balanced"] = "la",
+        pct_pre_approved: Optional[float] = None,
+        pct_custom: Optional[float] = None,
+        pct_self_cert: Optional[float] = None,
+        pct_like_for_like: Optional[float] = None,
         review_duration_families: Optional[Dict[str, str]] = None,
         review_duration_multipliers: Optional[Dict[str, float]] = None,
         pre_application_distribution: str = "baseline",
@@ -296,10 +317,14 @@ class PermitSimulation:
             env: SimPy Environment.
             random_seed: Random seed for reproducibility.
             ai_review: AI review mode: "none", "initial_check", "full_review".
-            pct_pre_approved: Share of permits that are pre-approved plans (0–1 fraction).
-            pct_custom: Share of permits that are custom builds (0–1 fraction).
-            pct_self_cert: Share of permits that are self-certification (0–1 fraction).
-            pct_like_for_like: Share of permits that are like-for-like (0–1 fraction).
+            permit_mix: Preset permit mix. Supported values:
+                - "all_custom_non_like_for_like"
+                - "la"
+                - "balanced"
+            pct_pre_approved: Optional manual override for pre-approved plan share.
+            pct_custom: Optional manual override for custom plan share.
+            pct_self_cert: Optional manual override for self-cert plan share.
+            pct_like_for_like: Optional manual override for like-for-like share.
             review_duration_families: Optional per-stage distribution family mapping for
                 'planning', 'public_works', and 'fire'. Supported families:
                 'normal', 'lognormal', 'triangular', 'uniform'.
@@ -332,11 +357,17 @@ class PermitSimulation:
         random.seed(random_seed)
         np.random.seed(random_seed)
 
-        # Store segment mix parameters
-        self.pct_pre_approved = pct_pre_approved
-        self.pct_custom = pct_custom
-        self.pct_self_cert = pct_self_cert
-        self.pct_like_for_like = pct_like_for_like
+        if permit_mix not in self.PERMIT_MIX_PRESETS:
+            supported = ", ".join(sorted(self.PERMIT_MIX_PRESETS.keys()))
+            raise ValueError(f"Invalid permit_mix '{permit_mix}'. Supported values: {supported}")
+        self.permit_mix = permit_mix
+        preset_mix = self.PERMIT_MIX_PRESETS[permit_mix]
+
+        # Store segment mix parameters (manual overrides still supported).
+        self.pct_pre_approved = preset_mix["pct_pre_approved"] if pct_pre_approved is None else pct_pre_approved
+        self.pct_custom = preset_mix["pct_custom"] if pct_custom is None else pct_custom
+        self.pct_self_cert = preset_mix["pct_self_cert"] if pct_self_cert is None else pct_self_cert
+        self.pct_like_for_like = preset_mix["pct_like_for_like"] if pct_like_for_like is None else pct_like_for_like
 
         default_review_families = {
             "planning": "normal",
