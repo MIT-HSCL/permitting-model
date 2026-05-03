@@ -13,21 +13,18 @@ def main(num_permits: int = 2000, random_seed: int = 42, save_path: str = "media
     sim_standard = run_simulation(
         num_permits=num_permits,
         random_seed=random_seed,
-        inter_arrival_time=0,
         sequential="standard",
     )
     print("Running Sequential process...")
     sim_sequential = run_simulation(
         num_permits=num_permits,
         random_seed=random_seed,
-        inter_arrival_time=0,
         sequential="sequential",
     )
     print("Running Parallel process...")
     sim_parallel = run_simulation(
         num_permits=num_permits,
         random_seed=random_seed,
-        inter_arrival_time=0,
         sequential="parallel",
     )
 

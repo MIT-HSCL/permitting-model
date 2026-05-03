@@ -23,7 +23,6 @@ def run_simulation(
     num_permits: int = 100,
     simulation_duration: float = None,
     random_seed: int = 42,
-    inter_arrival_time: float = 0.0,  # days between permit arrivals
     sequential: str = "standard",
     ai_review: str = "none",
     pct_pre_approved: float = 0.02,
@@ -47,7 +46,6 @@ def run_simulation(
         num_permits: Number of permits to simulate (if simulation_duration is None)
         simulation_duration: Maximum simulation time in days (if None, runs until all permits complete)
         random_seed: Random seed for reproducibility
-        inter_arrival_time: Average time between permit arrivals (days)
         sequential: Processing mode: \"standard\", \"parallel\", or \"sequential\".
         pct_pre_approved: Fraction of permits that are pre-approved plans (0–1).
         pct_custom: Fraction of permits that are custom builds (0–1).
@@ -110,8 +108,8 @@ def run_simulation(
                 raise ValueError(f"Invalid sequential processing type: {sequential}")
             count += 1
             
-            # Exponential inter-arrival time
-            yield env.timeout(inter_arrival_time)
+            # Permits arrive immediately (no delay).
+            yield env.timeout(0)
     
     # Start generating permits
     env.process(permit_generator())
@@ -132,7 +130,6 @@ def run_multiple_simulations(
     num_permits: int = 100,
     simulation_duration: float | None = None,
     base_seed: int = 42,
-    inter_arrival_time: float = 0.0,
     scenario_params_list: list[dict] | None = None,
     collect_permits: bool = False,
     collect_average_staff_utilization: bool = False,
@@ -146,7 +143,6 @@ def run_multiple_simulations(
         num_permits: Number of permits per run (if simulation_duration is None).
         simulation_duration: Max simulation time in days (optional).
         base_seed: Base random seed; each run uses base_seed + run_index.
-        inter_arrival_time: Average time between permit arrivals (days).
         scenario_params_list: List of dicts, each describing a scenario.
             Each dict can contain:
               - "name": scenario name (string, for labeling)
@@ -212,7 +208,6 @@ def run_multiple_simulations(
                 num_permits=num_permits,
                 simulation_duration=simulation_duration,
                 random_seed=seed,
-                inter_arrival_time=inter_arrival_time,
                 **params,
             )
             stats = sim.get_statistics()

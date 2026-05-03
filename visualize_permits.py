@@ -41,8 +41,8 @@ GANTT_COLORS_OPTION_1 = {
     "Public Works (service)": "#E08FFF", #dark pink
     "Fire Review (waiting)": "#FFD9D9", #light red
     "Fire Review (service)": "#FE7070", #dark red
-    "Pre-Application Activities": "#55C45E", #light green is C3F7C*
-    "Applicant Revisions": "#55C45E", #light green
+    "Pre-Application Activities": "#C3F7C5", # lighter green
+    "Applicant Revisions": "#55C45E", # darker green
 }
 
 GANTT_COLORS_OPTION_2 = {
@@ -59,7 +59,7 @@ GANTT_COLORS_OPTION_2 = {
     "Public Works (service)": "#FFE341",
     "Fire Review (waiting)": "#FFF7A1",
     "Fire Review (service)": "#FFE341",
-    "Pre-Application Activities": "#55C45E",
+    "Pre-Application Activities": "#C3F7C5",
     "Applicant Revisions": "#55C45E",
 }
 
@@ -459,6 +459,7 @@ def plot_gantt_single_permit(
         return None, None
 
     fig, ax = plt.subplots(figsize=figsize)
+    days_per_month = 30.0
 
     # Define the four fixed rows the user requested
     # Six fixed rows in logical order:
@@ -509,7 +510,8 @@ def plot_gantt_single_permit(
 
     # Plot each interval on the appropriate fixed row
     for start, end, label, color, is_waiting in intervals:
-        duration = end - start
+        start_months = start / days_per_month
+        duration = (end - start) / days_per_month
         if duration <= 0:
             continue
         base = label.replace(" (waiting)", "").replace(" (service)", "")
@@ -525,7 +527,7 @@ def plot_gantt_single_permit(
         ax.barh(
             y_pos,
             duration,
-            left=start,
+            left=start_months,
             height=bar_height,
             color=color,
             alpha=alpha,
@@ -556,15 +558,16 @@ def plot_gantt_single_permit(
         )
         legend_handles.append(patch)
     if legend_handles:
-        ax.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=15)
+        ax.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=17)
 
     ax.set_yticks(y_positions)
-    ax.set_yticklabels(row_labels, fontsize=16)
-    ax.set_xlabel('Time (days)', fontsize=18)
+    ax.set_yticklabels(row_labels, fontsize=18)
+    ax.set_xlabel('Time (months)', fontsize=20)
     if title is None:
         title = f"Gantt: Permit {p.permit_id} ({p.segment.name})"
-    ax.set_title(title, fontsize=20, fontweight='bold')
-    ax.tick_params(axis='x', labelsize=15)
+    ax.set_title(title, fontsize=22, fontweight='bold')
+    ax.tick_params(axis='x', labelsize=17)
+    ax.tick_params(axis='y', labelsize=18)
     ax.grid(axis='x', alpha=0.3)
     plt.tight_layout()
     return fig, ax
@@ -624,12 +627,10 @@ def plot_gantt_three_random_permits(
         for s in stages:
             stage_to_row[s] = idx
 
-    all_row_labels = []
-    for perm in selected:
-        for row_name, _ in row_definitions:
-            all_row_labels.append(f"Permit {perm.permit_id} – {row_name}")
+    permit_labels = [f"Permit {idx + 1}" for idx in range(n_permits)]
 
     fig, ax = plt.subplots(figsize=figsize)
+    days_per_month = 30.0
     bar_height = 0.65
 
     # One legend entry per interval label actually drawn (full label + waiting flag)
@@ -662,7 +663,8 @@ def plot_gantt_three_random_permits(
         y_offset = perm_idx * n_rows_per_permit
 
         for start, end, label, color, is_waiting in intervals:
-            duration = end - start
+            start_months = start / days_per_month
+            duration = (end - start) / days_per_month
             if duration <= 0:
                 continue
             base = label.replace(" (waiting)", "").replace(" (service)", "")
@@ -675,7 +677,7 @@ def plot_gantt_three_random_permits(
             ax.barh(
                 y_pos,
                 duration,
-                left=start,
+                left=start_months,
                 height=bar_height,
                 color=color,
                 alpha=alpha,
@@ -700,13 +702,17 @@ def plot_gantt_three_random_permits(
             facecolor=color, alpha=alpha, edgecolor="black", linewidth=0.5,
             hatch=hatch, label=lab,
         ))
-    ax.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=15)
+    ax.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=17)
 
     n_total_rows = n_permits * n_rows_per_permit
-    ax.set_yticks(range(n_total_rows))
-    ax.set_yticklabels([])
-    ax.set_xlabel('Time (days)', fontsize=18)
-    ax.tick_params(axis='x', labelsize=15)
+    lane_centers = [
+        i * n_rows_per_permit + (n_rows_per_permit - 1) / 2 for i in range(n_permits)
+    ]
+    ax.set_yticks(lane_centers)
+    ax.set_yticklabels(permit_labels, fontsize=18)
+    ax.set_xlabel('Time (months)', fontsize=20)
+    ax.tick_params(axis='x', labelsize=17)
+    ax.tick_params(axis='y', labelsize=18)
     ax.grid(axis='x', alpha=0.3)
     ax.invert_yaxis()
     plt.tight_layout()
@@ -752,9 +758,13 @@ def plot_gantt_one_random_permit_segment(
     )
 
 
-def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxplot=True):
+def plot_total_time_by_segment(
+    permits: List[Permit],
+    figsize=(10, 6),
+    show_boxplot=True,
+):
     """
-    Create a visualization of the total time from disaster to construction start for each segment.
+    Create a visualization of time from disaster to construction start for each segment.
     Can be a box plot (default) or a bar chart with error bars.
     
     Args:
@@ -767,8 +777,8 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
     segment_times = {segment: [] for segment in Segment}
     for permit in permits:
         if permit.ready_for_construction is not None and permit.created_at is not None:
-            total_time = permit.ready_for_construction - permit.created_at
-            segment_times[permit.segment].append(total_time)
+            total_time_years = (permit.ready_for_construction - permit.created_at) / 365.0
+            segment_times[permit.segment].append(total_time_years)
     
     # Filter out segments with no data
     segment_data = {s: times for s, times in segment_times.items() if times}
@@ -801,24 +811,23 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
     
     if show_boxplot:
         data = [segment_data[s] for s in segments]
-        bp = ax.boxplot(data, patch_artist=True, vert=True, showmeans=True, 
-                        medianprops={'color': 'red'}, meanprops={'marker': 'o', 'markeredgecolor': 'black', 'markerfacecolor': 'green'})
+        bp = ax.boxplot(
+            data,
+            patch_artist=True,
+            vert=True,
+            showmeans=True,
+            medianprops={'color': 'red'},
+            meanprops={'marker': 'o', 'markeredgecolor': 'black', 'markerfacecolor': 'green'},
+        )
         
         # Add colors to box plots (match quartiles chart: Custom like, Pre-approved like, Self-cert like, then non-like)
         colors = ['#1565C0', '#2E7D32', '#EF6C00', '#90CAF9', '#81C784', '#FFB74D']
         for patch, color in zip(bp['boxes'], colors[:len(segments)]):
             patch.set_facecolor(color)
         
-        # Add sample size (n)
-        for i, s in enumerate(segments):
-            count = len(segment_data[s])
-            y_pos = np.median(data[i])  # Position near the median
-            ax.text(i + 1, np.max(data[i]) + 0.05 * (np.max(data[i]) - np.min(data[i])), f'n={count}',
-                    horizontalalignment='center', verticalalignment='bottom', fontsize=9, color='gray')
-        
         # Add dashed reference lines for 1 year and 2 years with text labels
-        one_year = 365
-        two_years = 730
+        one_year = 1
+        two_years = 2
         ax.axhline(y=one_year, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
         ax.axhline(y=two_years, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
         ax.text(1.02, one_year, ' 1 Year', transform=ax.get_yaxis_transform(), ha='left', va='center',
@@ -826,21 +835,23 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
         ax.text(1.02, two_years, ' 2 Years', transform=ax.get_yaxis_transform(), ha='left', va='center',
                 fontsize=10, color='gray', alpha=0.8)
         
-        ax.set_ylabel('Total Time (days)', fontsize=12)
-        ax.set_title('Total Time from Disaster to Construction Start by Segment (Box Plot)', fontsize=14, fontweight='bold')
+        ax.set_ylabel('Time from Disaster to Construction Start (years)', fontsize=12)
+        ax.set_title('Time from Disaster to Construction Start by Segment (Box Plot)', fontsize=14, fontweight='bold')
         ax.set_xticks(np.arange(1, len(segments) + 1))
         ax.set_xticklabels(labels, rotation=45, ha='right')
         ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(bottom=0)
     else:
         means = [np.mean(segment_data[s]) for s in segments]
         stds = [np.std(segment_data[s]) for s in segments]
         
         ax.bar(labels, means, yerr=stds, capsize=5, color=['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#BB8FCE'][:len(segments)], alpha=0.8)
-        ax.set_ylabel('Average Total Time (days)', fontsize=12)
-        ax.set_title('Average Total Time from Disaster to Construction Start by Segment', fontsize=14, fontweight='bold')
+        ax.set_ylabel('Average Time from Disaster to Construction Start (years)', fontsize=12)
+        ax.set_title('Average Time from Disaster to Construction Start by Segment', fontsize=14, fontweight='bold')
         ax.set_xticks(np.arange(len(segments)))
         ax.set_xticklabels(labels, rotation=45, ha='right')
         ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(bottom=0)
     
     plt.tight_layout()
     return fig, ax
@@ -848,7 +859,7 @@ def plot_total_time_by_segment(permits: List[Permit], figsize=(10, 6), show_boxp
 
 def plot_total_time_by_segment_quartiles(permits: List[Permit], figsize=(10, 6)):
     """
-    Create a bar chart of total time from disaster to construction start by segment,
+    Create a bar chart of time from disaster to construction start by segment,
     showing median with 25th and 75th percentile as error bars.
 
     Args:
@@ -860,8 +871,8 @@ def plot_total_time_by_segment_quartiles(permits: List[Permit], figsize=(10, 6))
     segment_times = {segment: [] for segment in Segment}
     for permit in permits:
         if permit.ready_for_construction is not None and permit.created_at is not None:
-            total_time = permit.ready_for_construction - permit.created_at
-            segment_times[permit.segment].append(total_time)
+            total_time_years = (permit.ready_for_construction - permit.created_at) / 365.0
+            segment_times[permit.segment].append(total_time_years)
 
     segment_data = {s: times for s, times in segment_times.items() if times}
     if not segment_data:
@@ -910,22 +921,17 @@ def plot_total_time_by_segment_quartiles(permits: List[Permit], figsize=(10, 6))
         if len(outliers) > 0:
             ax.scatter(np.full(len(outliers), x[i]), outliers, color='black', alpha=0.4, s=20, zorder=5)
 
-    # Add sample size (n)
-    for i, s in enumerate(segments):
-        count = len(segment_data[s])
-        ax.text(i, p75[i] + 0.02 * (p75[i] - p25[i]) if p75[i] != p25[i] else medians[i] + 5, f'n={count}',
-                horizontalalignment='center', verticalalignment='bottom', fontsize=9, color='gray')
-
-    one_year = 365
+    one_year = 1
     ax.axhline(y=one_year, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
     ax.text(1.02, one_year, ' 1 Year', transform=ax.get_yaxis_transform(), ha='left', va='center',
             fontsize=10, color='gray', alpha=0.8)
 
-    ax.set_ylabel('Total Time (days)', fontsize=12)
-    ax.set_title('Total Time from Disaster to Construction Start by Segment (Median, 25th–75th percentiles)', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Time from Disaster to Construction Start (years)', fontsize=12)
+    ax.set_title('Time from Disaster to Construction Start by Segment (Median, 25th–75th percentiles)', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=45, ha='right')
     ax.grid(axis='y', alpha=0.3)
+    ax.set_ylim(bottom=0)
 
     plt.tight_layout()
     return fig, ax
@@ -1287,7 +1293,7 @@ if __name__ == "__main__":
     from run_simulation import run_simulation
     
     print("Running simulation...")
-    sim = run_simulation(num_permits=50, random_seed=42, inter_arrival_time=1.0)
+    sim = run_simulation(num_permits=50, random_seed=42)
     
     print(f"\nCompleted {len(sim.completed_permits)} permits")
     print("Creating visualizations...\n")
