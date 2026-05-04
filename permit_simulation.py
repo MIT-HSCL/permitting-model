@@ -423,12 +423,7 @@ class PermitSimulation:
         self.permit_counter = 0
         # Applicant revision coordination per permit:
         # - _revision_events gates review processes while a revision is pending/running
-        # - _active_reviews counts in-progress review services (Planning, Public Works, Fire, Public Health)
-        # - _no_active_events is triggered when active reviews drop to zero so revisions
-        #   can start without overlapping any review service time.
         self._revision_events: Dict[int, simpy.Event] = {}
-        self._active_reviews: Dict[int, int] = {}
-        self._no_active_events: Dict[int, simpy.Event] = {}
 
     def _set_usace_capacity(self, new_capacity: int) -> None:
         """Update USACE debris server capacity and wake queued requests."""
@@ -635,9 +630,6 @@ class PermitSimulation:
                 permit.planning_initial_waiting += (service_start_time - request_time)
             else:
                 permit.planning_recheck_waiting += (service_start_time - request_time)
-            # Mark review service as active (for revision overlap control)
-            self._active_reviews[permit.permit_id] = self._active_reviews.get(permit.permit_id, 0) + 1
-
             if is_initial:
                 planning_multiplier = self.review_duration_multipliers.get("planning", 1.0)
                 if permit.segment in [Segment.PRE_APPROVED_NON_LIKE, Segment.CUSTOM_NON_LIKE, Segment.SELF_CERT_NON_LIKE]:
@@ -666,14 +658,6 @@ class PermitSimulation:
             if planning_staff_id is not None and planning_staff_id >= 0:
                 self.planning_staff_pool.release(planning_staff_id)
 
-            pid = permit.permit_id
-            if self._active_reviews.get(pid, 0) > 0:
-                self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
-            if self._active_reviews.get(pid, 0) <= 0:
-                self._active_reviews[pid] = 0
-                no_evt = self._no_active_events.get(pid)
-                if no_evt is not None and not no_evt.triggered:
-                    no_evt.succeed()
         
         if permit.planning_rechecks == 0:
             # 10% approved, 90% need re-check
@@ -754,9 +738,6 @@ class PermitSimulation:
                 permit.public_works_reviewer_staff_id = public_works_staff_id
 
             service_start_time = self.env.now
-            # Mark review service as active for overlap control
-            self._active_reviews[permit.permit_id] = self._active_reviews.get(permit.permit_id, 0) + 1
-
             if is_initial:
                 permit.public_works_service_start = service_start_time  # Track first service start
             permit.public_works_total_waiting += (service_start_time - request_time)  # Track cumulative waiting
@@ -794,15 +775,6 @@ class PermitSimulation:
         finally:
             if public_works_staff_id is not None and public_works_staff_id >= 0:
                 self.public_works_staff_pool.release(public_works_staff_id)
-
-            pid = permit.permit_id
-            if self._active_reviews.get(pid, 0) > 0:
-                self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
-            if self._active_reviews.get(pid, 0) <= 0:
-                self._active_reviews[pid] = 0
-                no_evt = self._no_active_events.get(pid)
-                if no_evt is not None and not no_evt.triggered:
-                    no_evt.succeed()
 
         if permit.public_works_rechecks == 0:
             # 10% approved, 90% need re-check
@@ -889,9 +861,6 @@ class PermitSimulation:
                 permit.fire_reviewer_staff_id = fire_staff_id
 
             service_start_time = self.env.now
-            # Mark review service as active
-            self._active_reviews[permit.permit_id] = self._active_reviews.get(permit.permit_id, 0) + 1
-
             if is_initial:
                 permit.fire_review_service_start = service_start_time
             permit.fire_review_total_waiting += (service_start_time - request_time)
@@ -927,15 +896,6 @@ class PermitSimulation:
             if fire_staff_id is not None and fire_staff_id >= 0:
                 self.fire_staff_pool.release(fire_staff_id)
 
-            # Mark end of active review time and notify revisions if no reviews remain
-            pid = permit.permit_id
-            if self._active_reviews.get(pid, 0) > 0:
-                self._active_reviews[pid] = self._active_reviews.get(pid, 1) - 1
-            if self._active_reviews.get(pid, 0) <= 0:
-                self._active_reviews[pid] = 0
-                no_evt = self._no_active_events.get(pid)
-                if no_evt is not None and not no_evt.triggered:
-                    no_evt.succeed()
         
         if permit.fire_rechecks == 0:
             # 54% approved, 60% need re-check
@@ -953,7 +913,11 @@ class PermitSimulation:
         return approved
 
     def applicant_revision(self, permit: Permit):
-        """Applicant revisions when a plan is returned but not yet approved. Time N(30, 10) days."""
+        """Applicant revisions when a plan is returned but not yet approved.
+
+        Revisions start immediately when triggered. New review work is still gated
+        by ``_revision_events`` while a revision is in progress.
+        """
         pid = permit.permit_id
         # If a revision is already in progress for this permit, just wait for it.
         existing_event = self._revision_events.get(pid)
@@ -965,17 +929,6 @@ class PermitSimulation:
         # new review work until it completes.
         evt = self.env.event()
         self._revision_events[pid] = evt
-
-        # Ensure we don't overlap applicant revisions with any in-progress
-        # review service time. If there are active reviews, wait until they
-        # all finish before starting the revision clock.
-        active = self._active_reviews.get(pid, 0)
-        if active > 0:
-            no_evt = self._no_active_events.get(pid)
-            if no_evt is None or no_evt.triggered:
-                no_evt = self.env.event()
-                self._no_active_events[pid] = no_evt
-            yield no_evt
 
         start_time = self.env.now
         duration_days = self.sample_gamma(5, 9)
