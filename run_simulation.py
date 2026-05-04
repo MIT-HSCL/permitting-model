@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 from typing import Any, Literal, Optional
 
 
@@ -150,6 +151,7 @@ def run_multiple_simulations(
         scenario_params_list: List of dicts, each describing a scenario.
             Each dict can contain:
               - "name": scenario name (string, for labeling)
+              - optional per-scenario overrides "num_permits", "simulation_duration"
               - any extra keyword args for run_simulation
                 (e.g. "sequential", "ai_review", pct_* parameters).
         collect_permits: If True, also return completed permits for each run.
@@ -201,13 +203,15 @@ def run_multiple_simulations(
     results: list[dict] = []
     for run_index in range(n_runs):
         seed = base_seed + run_index
-        for scenario in scenario_params_list:
-            scenario_name = scenario.get("name", f"scenario_{len(results)}")
+        for scenario_index, scenario in enumerate(scenario_params_list):
+            scenario_name = scenario.get("name", f"scenario_{scenario_index}")
             params = {k: v for k, v in scenario.items() if k != "name"}
+            scenario_num_permits = params.pop("num_permits", num_permits)
+            scenario_duration = params.pop("simulation_duration", simulation_duration)
 
             sim = run_simulation(
-                num_permits=num_permits,
-                simulation_duration=simulation_duration,
+                num_permits=scenario_num_permits,
+                simulation_duration=scenario_duration,
                 random_seed=seed,
                 **params,
             )
@@ -258,43 +262,82 @@ def plot_staff_utilization_series(
     title: str = "Mean staff utilization over time (multi-run average)",
     xlim: Optional[tuple[float, float]] = None,
     ylim: Optional[tuple[float, float]] = None,
-) -> None:
-    """Plot planning / fire / public works utilization from a util dict (e.g. multi-run mean)."""
-    title_fontsize = 18
-    label_fontsize = 16
-    tick_fontsize = 14
-    legend_fontsize = 14
+    ax: Optional[Axes] = None,
+    legend: bool = True,
+    title_size: Optional[float] = None,
+    axis_label_size: Optional[float] = None,
+    tick_label_size: Optional[float] = None,
+    legend_size: Optional[float] = None,
+    line_width: Optional[float] = None,
+) -> Optional[Axes]:
+    """Plot planning / fire / public works utilization from a util dict (e.g. multi-run mean).
+
+    If ``ax`` is provided, draws on that axes and returns it (does not call ``plt.show()``).
+    Otherwise creates a standalone figure, shows it, and returns None.
+
+    Optional ``*_size`` arguments override default font sizes (points). ``line_width``
+    overrides default trace width when given.
+    """
+    title_fontsize = (
+        title_size if title_size is not None else (18 if ax is None else 11)
+    )
+    label_fontsize = (
+        axis_label_size if axis_label_size is not None else (16 if ax is None else 10)
+    )
+    tick_fontsize = (
+        tick_label_size if tick_label_size is not None else (14 if ax is None else 9)
+    )
+    legend_fontsize = (
+        legend_size if legend_size is not None else (14 if ax is None else 8)
+    )
+    lw = line_width if line_width is not None else 2.0
 
     days = util["days"]
     months = [d / 30.0 for d in days]
     scale = 100.0 if as_percent else 1.0
     ylabel = "Utilization (%)" if as_percent else "Utilization (load / capacity)"
     ymax = 105.0 if as_percent else 1.05
-    plt.figure(figsize=(12, 6))
-    plt.plot(months, [v * scale for v in util["planning"]], label="Planning", linewidth=2)
-    plt.plot(months, [v * scale for v in util["fire"]], label="Fire", linewidth=2)
-    plt.plot(months, [v * scale for v in util["public_works"]], label="Public Works", linewidth=2)
+
+    target_ax = ax
+    if target_ax is None:
+        plt.figure(figsize=(12, 6))
+        target_ax = plt.gca()
+
+    target_ax.plot(
+        months, [v * scale for v in util["planning"]], label="Planning", linewidth=lw
+    )
+    target_ax.plot(months, [v * scale for v in util["fire"]], label="Fire", linewidth=lw)
+    target_ax.plot(
+        months,
+        [v * scale for v in util["public_works"]],
+        label="Public Works",
+        linewidth=lw,
+    )
     if ylim is None:
-        plt.ylim(0, ymax)
+        target_ax.set_ylim(0, ymax)
     else:
-        plt.ylim(*ylim)
+        target_ax.set_ylim(*ylim)
     if xlim is None:
-        plt.xlim(0, max(months) if months else 0)
+        target_ax.set_xlim(0, max(months) if months else 0)
     else:
         # Backward-compatible: if caller passes day-scale limits, convert to months.
         x0, x1 = xlim
         if x1 > 120:  # heuristic: old day-scale limits are typically much larger.
             x0, x1 = x0 / 30.0, x1 / 30.0
-        plt.xlim(x0, x1)
-    plt.xlabel("Time since disaster (months)", fontsize=label_fontsize)
-    plt.ylabel(ylabel, fontsize=label_fontsize)
-    plt.title(title, fontsize=title_fontsize)
-    plt.xticks(fontsize=tick_fontsize)
-    plt.yticks(fontsize=tick_fontsize)
-    plt.grid(True, alpha=0.3)
-    plt.legend(fontsize=legend_fontsize)
-    plt.tight_layout()
-    plt.show()
+        target_ax.set_xlim(x0, x1)
+    target_ax.set_xlabel("Time since disaster (months)", fontsize=label_fontsize)
+    target_ax.set_ylabel(ylabel, fontsize=label_fontsize)
+    target_ax.set_title(title, fontsize=title_fontsize)
+    target_ax.tick_params(axis="both", labelsize=tick_fontsize)
+    target_ax.grid(True, alpha=0.3)
+    if legend:
+        target_ax.legend(fontsize=legend_fontsize)
+
+    if ax is None:
+        plt.tight_layout()
+        plt.show()
+        return None
+    return target_ax
 
 
 def plot_staff_utilization(

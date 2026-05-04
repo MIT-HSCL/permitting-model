@@ -5,6 +5,7 @@ Creates various charts showing time spent in each stage of the process.
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.axes import Axes
 import numpy as np
 from typing import List, Optional
 from permit_simulation import Permit
@@ -1021,6 +1022,15 @@ def plot_average_waiting_and_service_by_step(
     permits: List[Permit],
     figsize=(10, 6),
     label_map: Optional[dict] = None,
+    ax: Optional[Axes] = None,
+    title: Optional[str] = None,
+    silent: bool = False,
+    *,
+    title_size: Optional[float] = None,
+    axis_label_size: Optional[float] = None,
+    tick_label_size: Optional[float] = None,
+    legend_size: Optional[float] = None,
+    bar_value_size: Optional[float] = None,
 ):
     """
     Bar chart of average waiting vs service time by process step.
@@ -1036,6 +1046,13 @@ def plot_average_waiting_and_service_by_step(
 
     Returns:
         (fig, ax) or (None, None) if there is nothing to plot.
+
+    If ``ax`` is provided, draws on that axes only (caller supplies figure layout /
+    ``tight_layout``). ``title`` overrides the default chart title when given.
+    Set ``silent=True`` to skip printed step summaries (useful for subplot grids).
+
+    Optional font sizes (points) override the default standalone vs subplot sizing
+    when provided.
     """
     if not permits:
         print("No permits provided for waiting/service by step chart.")
@@ -1084,7 +1101,11 @@ def plot_average_waiting_and_service_by_step(
     x = np.arange(len(steps))
     width = 0.35
 
-    fig, ax = plt.subplots(figsize=figsize)
+    standalone = ax is None
+    if standalone:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     bars_wait = ax.bar(
         x - width / 2,
@@ -1103,17 +1124,41 @@ def plot_average_waiting_and_service_by_step(
         edgecolor="black",
     )
 
+    default_title = 14 if standalone else 10
+    default_axis = 12 if standalone else 9
+    default_tick = 10 if standalone else 7
+    default_legend = 11 if standalone else 7
+    default_bar_val = 8
+
     ax.set_title(
-        "Average Total Waiting vs Service Time by Process Step",
-        fontsize=14,
+        title
+        if title is not None
+        else "Average Total Waiting vs Service Time by Process Step",
+        fontsize=title_size if title_size is not None else default_title,
         fontweight="bold",
-        pad=12,
+        pad=12 if standalone else 6,
     )
-    ax.set_ylabel("Average Time (days)", fontsize=12)
-    ax.set_xlabel("Process Step", fontsize=12)
+    ax.set_ylabel(
+        "Average Time (days)",
+        fontsize=axis_label_size if axis_label_size is not None else default_axis,
+    )
+    ax.set_xlabel(
+        "Process Step",
+        fontsize=axis_label_size if axis_label_size is not None else default_axis,
+    )
     ax.set_xticks(x)
-    ax.set_xticklabels(display_labels, rotation=40, ha="right", fontsize=10)
-    ax.legend(loc="upper right", fontsize=11, framealpha=0.95)
+    ax.set_xticklabels(
+        display_labels,
+        rotation=40,
+        ha="right",
+        fontsize=tick_label_size if tick_label_size is not None else default_tick,
+    )
+    ax.tick_params(axis="y", labelsize=tick_label_size if tick_label_size is not None else default_tick)
+    ax.legend(
+        loc="upper right",
+        fontsize=legend_size if legend_size is not None else default_legend,
+        framealpha=0.95,
+    )
     ax.grid(axis="y", alpha=0.35, linestyle="-", color="#BDBDBD")
     ax.set_axisbelow(True)
 
@@ -1132,20 +1177,22 @@ def plot_average_waiting_and_service_by_step(
             f"{height:.1f}",
             ha="center",
             va="bottom",
-            fontsize=8,
+            fontsize=bar_value_size if bar_value_size is not None else default_bar_val,
         )
 
-    print("Average waiting and service time by step (days):")
-    for step, w_mean, w_std, s_mean, s_std in zip(
-        steps, waiting_means, waiting_stds, service_means, service_stds
-    ):
-        print(
-            f"  {step}: "
-            f"waiting mean={w_mean:.2f}, σ={w_std:.2f}; "
-            f"service mean={s_mean:.2f}, σ={s_std:.2f}"
-        )
+    if not silent:
+        print("Average waiting and service time by step (days):")
+        for step, w_mean, w_std, s_mean, s_std in zip(
+            steps, waiting_means, waiting_stds, service_means, service_stds
+        ):
+            print(
+                f"  {step}: "
+                f"waiting mean={w_mean:.2f}, σ={w_std:.2f}; "
+                f"service mean={s_mean:.2f}, σ={s_std:.2f}"
+            )
 
-    plt.tight_layout()
+    if standalone:
+        plt.tight_layout()
     return fig, ax
 
 
