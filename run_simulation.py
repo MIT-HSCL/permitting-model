@@ -11,6 +11,11 @@ import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from typing import Any, Literal, Optional
 
+try:
+    from tqdm.auto import tqdm as _tqdm
+except ImportError:  # pragma: no cover
+    _tqdm = None  # type: ignore[misc, assignment]
+
 
 def _env_clock(env) -> float:
     """Current simulation time. SimPy 4+ uses `env.now` (float); avoid `env.now()`."""
@@ -139,6 +144,11 @@ def run_multiple_simulations(
     collect_permits: bool = False,
     collect_average_staff_utilization: bool = False,
     utilization_step: float = 0.05,
+    utilization_kind: Literal["actual", "implied"] = "actual",
+    *,
+    show_progress: bool = False,
+    progress_desc: str | None = None,
+    progress_leave: bool = True,
 ):
     """
     Run the simulation many times, optionally for multiple scenarios.
@@ -159,6 +169,12 @@ def run_multiple_simulations(
             planning / public works / fire utilization time series across runs
             (one series per scenario group; see Returns).
         utilization_step: Day spacing when sampling utilization (smaller = finer).
+        utilization_kind: ``"actual"`` = assigned concurrent caseload / capacity;
+            ``"implied"`` = (assigned load + wait-queue length) / capacity (can exceed 100%).
+        show_progress: If True, show a tqdm progress bar for each simulation replicate
+            (``n_runs`` × number of scenarios). Requires the ``tqdm`` package.
+        progress_desc: Optional short label for the progress bar.
+        progress_leave: tqdm ``leave`` flag (set False when nesting bars).
 
     Example scenario list:
         [
@@ -193,6 +209,7 @@ def run_multiple_simulations(
               "fire": list[float],
               "n_runs": int,
               "max_day": int,
+              "utilization_kind": str,  # "actual" or "implied"
             }
     """
     if scenario_params_list is None:
@@ -201,33 +218,54 @@ def run_multiple_simulations(
     util_sims_by_scenario: dict[str, list[PermitSimulation]] = {}
 
     results: list[dict] = []
-    for run_index in range(n_runs):
-        seed = base_seed + run_index
-        for scenario_index, scenario in enumerate(scenario_params_list):
-            scenario_name = scenario.get("name", f"scenario_{scenario_index}")
-            params = {k: v for k, v in scenario.items() if k != "name"}
-            scenario_num_permits = params.pop("num_permits", num_permits)
-            scenario_duration = params.pop("simulation_duration", simulation_duration)
-
-            sim = run_simulation(
-                num_permits=scenario_num_permits,
-                simulation_duration=scenario_duration,
-                random_seed=seed,
-                **params,
+    n_scenarios = len(scenario_params_list)
+    total_steps = n_runs * n_scenarios
+    pbar = None
+    if show_progress:
+        if _tqdm is None:
+            raise ImportError(
+                "show_progress=True requires tqdm. Install with: pip install tqdm"
             )
-            stats = sim.get_statistics()
-            entry: dict = {
-                "run_index": run_index,
-                "seed": seed,
-                "scenario": scenario_name,
-                "params": params,
-                "stats": stats,
-            }
-            if collect_permits:
-                entry["permits"] = list(sim.completed_permits)
-            results.append(entry)
-            if collect_average_staff_utilization:
-                util_sims_by_scenario.setdefault(scenario_name, []).append(sim)
+        pbar = _tqdm(
+            total=total_steps,
+            desc=progress_desc or "Simulations",
+            unit="run",
+            leave=progress_leave,
+        )
+
+    try:
+        for run_index in range(n_runs):
+            seed = base_seed + run_index
+            for scenario_index, scenario in enumerate(scenario_params_list):
+                scenario_name = scenario.get("name", f"scenario_{scenario_index}")
+                params = {k: v for k, v in scenario.items() if k != "name"}
+                scenario_num_permits = params.pop("num_permits", num_permits)
+                scenario_duration = params.pop("simulation_duration", simulation_duration)
+
+                sim = run_simulation(
+                    num_permits=scenario_num_permits,
+                    simulation_duration=scenario_duration,
+                    random_seed=seed,
+                    **params,
+                )
+                stats = sim.get_statistics()
+                entry: dict = {
+                    "run_index": run_index,
+                    "seed": seed,
+                    "scenario": scenario_name,
+                    "params": params,
+                    "stats": stats,
+                }
+                if collect_permits:
+                    entry["permits"] = list(sim.completed_permits)
+                results.append(entry)
+                if collect_average_staff_utilization:
+                    util_sims_by_scenario.setdefault(scenario_name, []).append(sim)
+                if pbar is not None:
+                    pbar.update(1)
+    finally:
+        if pbar is not None:
+            pbar.close()
 
     if collect_average_staff_utilization:
         average_staff_utilization_by_scenario: dict[str, dict[str, Any]] = {}
@@ -236,7 +274,12 @@ def run_multiple_simulations(
                 continue
             max_day = max(int(_env_clock(s.env)) for s in sims)
             series_list = [
-                s.get_staff_utilization_over_time(days=max_day, step=utilization_step) for s in sims
+                s.get_staff_utilization_over_time(
+                    days=max_day,
+                    step=utilization_step,
+                    utilization_kind=utilization_kind,
+                )
+                for s in sims
             ]
             days = series_list[0]["days"]
             planning = np.mean([u["planning"] for u in series_list], axis=0)
@@ -249,6 +292,7 @@ def run_multiple_simulations(
                 "fire": fire.tolist(),
                 "n_runs": len(sims),
                 "max_day": max_day,
+                "utilization_kind": utilization_kind,
             }
         return results, average_staff_utilization_by_scenario
 
@@ -260,6 +304,7 @@ def plot_staff_utilization_series(
     *,
     as_percent: bool = True,
     title: str = "Mean staff utilization over time (multi-run average)",
+    utilization_kind: Optional[Literal["actual", "implied"]] = None,
     xlim: Optional[tuple[float, float]] = None,
     ylim: Optional[tuple[float, float]] = None,
     ax: Optional[Axes] = None,
@@ -292,11 +337,27 @@ def plot_staff_utilization_series(
     )
     lw = line_width if line_width is not None else 2.0
 
+    kind: Literal["actual", "implied"] = (
+        utilization_kind
+        if utilization_kind is not None
+        else util.get("utilization_kind", "actual")  # type: ignore[assignment]
+    )
+    if kind not in ("actual", "implied"):
+        kind = "actual"
+
     days = util["days"]
     months = [d / 30.0 for d in days]
     scale = 100.0 if as_percent else 1.0
-    ylabel = "Utilization (%)" if as_percent else "Utilization (load / capacity)"
-    ymax = 105.0 if as_percent else 1.05
+    if kind == "implied":
+        ylabel = (
+            "Implied utilization (%)\n(active + waiting) / capacity"
+            if as_percent
+            else "Implied utilization ((active + waiting) / capacity)"
+        )
+        ymax = None
+    else:
+        ylabel = "Utilization (%)" if as_percent else "Utilization (load / capacity)"
+        ymax = 105.0 if as_percent else 1.05
 
     target_ax = ax
     if target_ax is None:
@@ -313,10 +374,12 @@ def plot_staff_utilization_series(
         label="Public Works",
         linewidth=lw,
     )
-    if ylim is None:
+    if ylim is not None:
+        target_ax.set_ylim(*ylim)
+    elif ymax is not None:
         target_ax.set_ylim(0, ymax)
     else:
-        target_ax.set_ylim(*ylim)
+        target_ax.set_ylim(bottom=0)
     if xlim is None:
         target_ax.set_xlim(0, max(months) if months else 0)
     else:
@@ -347,10 +410,19 @@ def plot_staff_utilization(
     as_percent: bool = True,
     xlim: Optional[tuple[float, float]] = None,
     ylim: Optional[tuple[float, float]] = None,
+    *,
+    utilization_kind: Literal["actual", "implied"] = "actual",
 ) -> None:
     """Plot planning, fire, and public works utilization for a single completed simulation."""
-    u = sim.get_staff_utilization_over_time(days=days, step=step)
-    plot_staff_utilization_series(u, as_percent=as_percent, title="Staff utilization over time", xlim=xlim, ylim=ylim)
+    u = sim.get_staff_utilization_over_time(days=days, step=step, utilization_kind=utilization_kind)
+    plot_staff_utilization_series(
+        u,
+        as_percent=as_percent,
+        title="Staff utilization over time",
+        xlim=xlim,
+        ylim=ylim,
+        utilization_kind=utilization_kind,
+    )
 
 
 def print_statistics(stats: dict):

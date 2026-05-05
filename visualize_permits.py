@@ -941,6 +941,7 @@ def plot_total_time_by_segment_quartiles(permits: List[Permit], figsize=(10, 6))
 def plot_median_total_time_by_process(
     permits_by_process: dict,
     figsize=(12, 6),
+    title: Optional[str] = None,
 ):
     """
     Create a grouped bar chart of median total time (disaster to construction start)
@@ -950,6 +951,7 @@ def plot_median_total_time_by_process(
         permits_by_process: Dict mapping process name (e.g. "Standard", "Sequential", "Parallel")
             to list of completed Permit objects.
         figsize: Figure size tuple.
+        title: Optional plot title; defaults to a generic label if None.
     """
     from permit_simulation import Segment
 
@@ -1008,7 +1010,13 @@ def plot_median_total_time_by_process(
 
     ax.set_ylabel("Median total time (days)", fontsize=12)
     ax.set_xlabel("Segment", fontsize=12)
-    ax.set_title("Median total time from disaster to construction start by segment", fontsize=14, fontweight="bold")
+    ax.set_title(
+        title
+        if title is not None
+        else "Median total time from disaster to construction start by segment",
+        fontsize=14,
+        fontweight="bold",
+    )
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=45, ha="right")
     ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=11)

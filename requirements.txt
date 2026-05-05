@@ -4,4 +4,5 @@ matplotlib>=3.5.0
 pandas>=3.0.0
 scipy>=1.11.0
 ipython>=8.0.0
+tqdm>=4.64.0
 

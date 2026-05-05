@@ -34,21 +34,25 @@ class StaffCaseloadPool:
         self._loads = [0] * self.staff_count
         self._waiters: list[tuple[int, int, simpy.Event]] = []
         self._seq = 0
-        self._load_history: list[tuple[float, int]] = [(0.0, 0)]
+        # (sim_time, active_assigned_slots, processes_waiting_for_a_slot)
+        self._state_history: list[tuple[float, int, int]] = [(0.0, 0, 0)]
 
     @property
     def total_capacity(self) -> int:
         return self.staff_count * self.caseload_per_staff
 
-    def _record_load(self):
-        total_load = int(sum(self._loads))
+    def _snapshot(self) -> None:
+        """Record active caseload and wait-queue length whenever either changes."""
+        load = int(sum(self._loads))
+        wait = len(self._waiters)
         now = float(self.env.now)
-        if self._load_history and self._load_history[-1][0] == now:
-            self._load_history[-1] = (now, total_load)
-        elif self._load_history and self._load_history[-1][1] == total_load:
+        last = self._state_history[-1]
+        if last[1] == load and last[2] == wait:
             return
+        if self._state_history and abs(self._state_history[-1][0] - now) < 1e-12:
+            self._state_history[-1] = (now, load, wait)
         else:
-            self._load_history.append((now, total_load))
+            self._state_history.append((now, load, wait))
 
     def _next_available_staff(self) -> Optional[int]:
         available = [idx for idx, load in enumerate(self._loads) if load < self.caseload_per_staff]
@@ -68,24 +72,25 @@ class StaffCaseloadPool:
                 staff_id = self._next_available_staff()
             if staff_id is not None:
                 self._loads[staff_id] += 1
-                self._record_load()
+                self._snapshot()
                 return staff_id
 
             evt = self.env.event()
             heapq.heappush(self._waiters, (priority, self._seq, evt))
             self._seq += 1
+            self._snapshot()
             yield evt
 
     def release(self, staff_id: int):
         self._loads[staff_id] = max(0, self._loads[staff_id] - 1)
-        self._record_load()
         if self._waiters:
             _, _, evt = heapq.heappop(self._waiters)
             if not evt.triggered:
                 evt.succeed()
+        self._snapshot()
 
-    def utilization_series(self, days: float, step: float = 1.0) -> Dict[str, List[float]]:
-        """Piecewise-constant utilization sampled from day 0 to `days`."""
+    def _sample_series(self, days: float, step: float, *, implied: bool) -> Dict[str, List[float]]:
+        """Piecewise-constant (active load) or implied (active + waiting) / capacity."""
         end_day = max(0.0, float(days))
         step = max(1e-6, float(step))
         x = [float(v) for v in np.arange(0.0, end_day + 1e-12, step)]
@@ -96,16 +101,30 @@ class StaffCaseloadPool:
         if self.total_capacity <= 0:
             return {"days": x, "utilization": [0.0 for _ in x]}
 
-        history = self._load_history if self._load_history else [(0.0, 0)]
+        history = self._state_history if self._state_history else [(0.0, 0, 0)]
         y: list[float] = []
         h_idx = 0
-        current_load = history[0][1]
+        cur_load = history[0][1]
+        cur_wait = history[0][2]
         for day in x:
             while h_idx + 1 < len(history) and history[h_idx + 1][0] <= day:
                 h_idx += 1
-                current_load = history[h_idx][1]
-            y.append(current_load / self.total_capacity)
+                cur_load = history[h_idx][1]
+                cur_wait = history[h_idx][2]
+            num = (cur_load + cur_wait) if implied else cur_load
+            y.append(num / self.total_capacity)
         return {"days": x, "utilization": y}
+
+    def utilization_series(self, days: float, step: float = 1.0) -> Dict[str, List[float]]:
+        """Actual utilization: assigned concurrent caseload / total capacity."""
+        return self._sample_series(days, step, implied=False)
+
+    def implied_utilization_series(self, days: float, step: float = 1.0) -> Dict[str, List[float]]:
+        """Implied utilization: (assigned load + queue length) / total capacity.
+
+        Values may exceed 1.0 when demand for slots exceeds concurrent capacity.
+        """
+        return self._sample_series(days, step, implied=True)
 
 
 @dataclass
@@ -791,18 +810,29 @@ class PermitSimulation:
 
         return approved
 
-    def public_works_until_approved(self, permit: Permit):
-        """Loop public works until approved (used for parallel flow).
+    def public_works_until_approved(
+        self,
+        permit: Permit,
+        *,
+        include_agency_referral: bool = True,
+    ):
+        """Loop public works until approved.
 
         Agency referral (non-like segments) is not inside the PW server block. It starts
         after the first failed PW attempt so it runs in parallel with applicant revisions
         and PW rechecks; if PW approves on the first try, agency referral runs after that.
+
+        When ``include_agency_referral`` is False (used by ``parallel_plan_reviews``),
+        PW handles only building review loops; agency referral is modeled as its own
+        concurrent process next to planning/zoning/PW/fire.
         """
         needs_agency_referral = permit.segment not in [
             Segment.PRE_APPROVED_LIKE,
             Segment.CUSTOM_LIKE,
             Segment.SELF_CERT_LIKE,
         ]
+        if not include_agency_referral:
+            needs_agency_referral = False
         agency_referral_proc = None
         public_works_approved = False
         while not public_works_approved:
@@ -1037,13 +1067,23 @@ class PermitSimulation:
         yield self.env.process(self.usace_debris_removal(permit))
 
     def parallel_plan_reviews(self, permit: Permit):
-        """Parallel reviews path after combined pre-application activities."""
+        """Parallel reviews path after combined pre-application activities.
+
+        Planning, special zoning, public works, fire, and agency referral (when required)
+        all run concurrently. Agency referral is not embedded in the PW loop here so it
+        is not double-counted.
+        """
         yield self.env.process(self.pre_application_activities(permit))
         parallel_processes = []
         parallel_processes.append(self.env.process(self.planning_until_approved(permit)))
         parallel_processes.append(self.env.process(self.special_zoning_review(permit)))
-        parallel_processes.append(self.env.process(self.public_works_until_approved(permit)))
+        parallel_processes.append(
+            self.env.process(
+                self.public_works_until_approved(permit, include_agency_referral=False)
+            )
+        )
         parallel_processes.append(self.env.process(self.fire_review_until_approved(permit)))
+        parallel_processes.append(self.env.process(self.agency_referral(permit)))
         yield simpy.AllOf(self.env, parallel_processes)
     
     def create_permit(self) -> Permit:
@@ -1239,15 +1279,33 @@ class PermitSimulation:
 
         return stats
 
-    def get_staff_utilization_over_time(self, days: float, step: float = 1.0) -> Dict[str, List[float]]:
-        """Sampled staff utilization (load / capacity) for planning, public works, and fire."""
-        planning = self.planning_staff_pool.utilization_series(days=days, step=step)
-        public_works = self.public_works_staff_pool.utilization_series(days=days, step=step)
-        fire = self.fire_staff_pool.utilization_series(days=days, step=step)
+    def get_staff_utilization_over_time(
+        self,
+        days: float,
+        step: float = 1.0,
+        *,
+        utilization_kind: Literal["actual", "implied"] = "actual",
+    ) -> Dict[str, List[float]]:
+        """Sampled staff utilization for planning, public works, and fire.
+
+        ``actual``: concurrent assigned caseload / capacity.
+        ``implied``: (assigned load + number of processes waiting for a slot) / capacity.
+        """
+        if utilization_kind not in ("actual", "implied"):
+            raise ValueError(f"utilization_kind must be 'actual' or 'implied', got {utilization_kind!r}")
+        if utilization_kind == "implied":
+            planning = self.planning_staff_pool.implied_utilization_series(days=days, step=step)
+            public_works = self.public_works_staff_pool.implied_utilization_series(days=days, step=step)
+            fire = self.fire_staff_pool.implied_utilization_series(days=days, step=step)
+        else:
+            planning = self.planning_staff_pool.utilization_series(days=days, step=step)
+            public_works = self.public_works_staff_pool.utilization_series(days=days, step=step)
+            fire = self.fire_staff_pool.utilization_series(days=days, step=step)
         return {
             "days": planning["days"],
             "planning": planning["utilization"],
             "public_works": public_works["utilization"],
             "fire": fire["utilization"],
+            "utilization_kind": utilization_kind,
         }
 
