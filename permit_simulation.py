@@ -291,8 +291,8 @@ class PermitSimulation:
             "pct_like_for_like": 0.803,
         },
         "balanced": {
-            "pct_pre_approved": 0.5,
-            "pct_custom": 0.25,
+            "pct_pre_approved": 0.25,
+            "pct_custom": 0.5,
             "pct_self_cert": 0.25,
             "pct_like_for_like": 0.8,
         },
