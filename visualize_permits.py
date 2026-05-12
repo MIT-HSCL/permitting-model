@@ -7,8 +7,29 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.axes import Axes
 import numpy as np
-from typing import List, Optional
+from typing import List, Optional, Sequence
 from permit_simulation import Permit
+
+
+def _show_boxplot_stats_table(
+    pairs: List[tuple[str, Sequence[float]]],
+    *,
+    heading: Optional[str],
+    enabled: bool,
+) -> None:
+    if not enabled or not pairs:
+        return
+    from simulation_plot_helpers import show_boxplot_stats_table
+
+    nonempty: List[tuple[str, Sequence[float]]] = []
+    for lab, vals in pairs:
+        arr = np.asarray(vals, dtype=float)
+        if np.isfinite(arr).any():
+            nonempty.append((lab, vals))
+    if not nonempty:
+        return
+    show_boxplot_stats_table(nonempty, heading=heading)
+
 
 DEFAULT_GANTT_COLORS = {
     "EPA Debris (waiting)": "#B3E5FC",      # Light blue (waiting state)
@@ -763,31 +784,41 @@ def plot_total_time_by_segment(
     permits: List[Permit],
     figsize=(10, 6),
     show_boxplot=True,
+    *,
+    show_stats_table: bool = True,
 ):
     """
-    Create a visualization of time from disaster to construction start for each segment.
-    Can be a box plot (default) or a bar chart with error bars.
-    
-    Args:
-        permits: List of Permit objects
-        figsize: Figure size tuple
-        show_boxplot: If True, show box plot; if False, show bar chart with error bars
+    Box plot of time from disaster to construction start for each segment (years).
+
+    ``show_boxplot=False`` is deprecated and treated as True (bar charts removed).
+
+    When ``show_stats_table`` is True (default), prints or displays a small table
+    (``n``, mean, std, min, quartiles, max) for each box series after the figure.
     """
+    from warnings import warn
+
     from permit_simulation import Segment
-    
+
+    if not show_boxplot:
+        warn(
+            "plot_total_time_by_segment(..., show_boxplot=False) is ignored; bar charts were removed.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     segment_times = {segment: [] for segment in Segment}
     for permit in permits:
         if permit.ready_for_construction is not None and permit.created_at is not None:
             total_time_years = (permit.ready_for_construction - permit.created_at) / 365.0
             segment_times[permit.segment].append(total_time_years)
-    
+
     # Filter out segments with no data
     segment_data = {s: times for s, times in segment_times.items() if times}
-    
+
     if not segment_data:
         print("No data to plot for total time by segment.")
         return None, None
-    
+
     # Use stable segment order and friendly labels (match quartiles plot)
     segment_order = [
         Segment.CUSTOM_LIKE,
@@ -807,65 +838,84 @@ def plot_total_time_by_segment(
     }
     segments = [s for s in segment_order if s in segment_data]
     labels = [label_by_segment[s] for s in segments]
-    
+
     fig, ax = plt.subplots(figsize=figsize)
-    
-    if show_boxplot:
-        data = [segment_data[s] for s in segments]
-        bp = ax.boxplot(
-            data,
-            patch_artist=True,
-            vert=True,
-            showmeans=True,
-            medianprops={'color': 'red'},
-            meanprops={'marker': 'o', 'markeredgecolor': 'black', 'markerfacecolor': 'green'},
-        )
-        
-        # Add colors to box plots (match quartiles chart: Custom like, Pre-approved like, Self-cert like, then non-like)
-        colors = ['#1565C0', '#2E7D32', '#EF6C00', '#90CAF9', '#81C784', '#FFB74D']
-        for patch, color in zip(bp['boxes'], colors[:len(segments)]):
-            patch.set_facecolor(color)
-        
-        # Add dashed reference lines for 1 year and 2 years with text labels
-        one_year = 1
-        two_years = 2
-        ax.axhline(y=one_year, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
-        ax.axhline(y=two_years, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
-        ax.text(1.02, one_year, ' 1 Year', transform=ax.get_yaxis_transform(), ha='left', va='center',
-                fontsize=10, color='gray', alpha=0.8)
-        ax.text(1.02, two_years, ' 2 Years', transform=ax.get_yaxis_transform(), ha='left', va='center',
-                fontsize=10, color='gray', alpha=0.8)
-        
-        ax.set_ylabel('Time from Disaster to Construction Start (years)', fontsize=12)
-        ax.set_title('Time from Disaster to Construction Start by Segment (Box Plot)', fontsize=14, fontweight='bold')
-        ax.set_xticks(np.arange(1, len(segments) + 1))
-        ax.set_xticklabels(labels, rotation=45, ha='right')
-        ax.grid(axis='y', alpha=0.3)
-        ax.set_ylim(bottom=0)
-    else:
-        means = [np.mean(segment_data[s]) for s in segments]
-        stds = [np.std(segment_data[s]) for s in segments]
-        
-        ax.bar(labels, means, yerr=stds, capsize=5, color=['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#BB8FCE'][:len(segments)], alpha=0.8)
-        ax.set_ylabel('Average Time from Disaster to Construction Start (years)', fontsize=12)
-        ax.set_title('Average Time from Disaster to Construction Start by Segment', fontsize=14, fontweight='bold')
-        ax.set_xticks(np.arange(len(segments)))
-        ax.set_xticklabels(labels, rotation=45, ha='right')
-        ax.grid(axis='y', alpha=0.3)
-        ax.set_ylim(bottom=0)
-    
+
+    data = [segment_data[s] for s in segments]
+    bp = ax.boxplot(
+        data,
+        patch_artist=True,
+        vert=True,
+        showmeans=True,
+        medianprops={"color": "red"},
+        meanprops={"marker": "o", "markeredgecolor": "black", "markerfacecolor": "green"},
+    )
+
+    # Add colors to box plots (match quartiles chart: Custom like, Pre-approved like, Self-cert like, then non-like)
+    colors = ["#1565C0", "#2E7D32", "#EF6C00", "#90CAF9", "#81C784", "#FFB74D"]
+    for patch, color in zip(bp["boxes"], colors[: len(segments)]):
+        patch.set_facecolor(color)
+
+    # Add dashed reference lines for 1 year and 2 years with text labels
+    one_year = 1
+    two_years = 2
+    ax.axhline(y=one_year, color="gray", linestyle="--", linewidth=1.5, alpha=0.7)
+    ax.axhline(y=two_years, color="gray", linestyle="--", linewidth=1.5, alpha=0.7)
+    ax.text(
+        1.02,
+        one_year,
+        " 1 Year",
+        transform=ax.get_yaxis_transform(),
+        ha="left",
+        va="center",
+        fontsize=10,
+        color="gray",
+        alpha=0.8,
+    )
+    ax.text(
+        1.02,
+        two_years,
+        " 2 Years",
+        transform=ax.get_yaxis_transform(),
+        ha="left",
+        va="center",
+        fontsize=10,
+        color="gray",
+        alpha=0.8,
+    )
+
+    ax.set_ylabel("Time from Disaster to Construction Start (years)", fontsize=12)
+    ax.set_title(
+        "Time from Disaster to Construction Start by Segment (Box Plot)",
+        fontsize=14,
+        fontweight="bold",
+    )
+    ax.set_xticks(np.arange(1, len(segments) + 1))
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.grid(axis="y", alpha=0.3)
+    ax.set_ylim(bottom=0)
+
     plt.tight_layout()
+    _show_boxplot_stats_table(
+        list(zip(labels, data)),
+        heading="Total time disaster → construction by segment (years)",
+        enabled=show_stats_table,
+    )
     return fig, ax
 
 
-def plot_total_time_by_segment_quartiles(permits: List[Permit], figsize=(10, 6)):
+def plot_total_time_by_segment_quartiles(
+    permits: List[Permit],
+    figsize=(10, 6),
+    *,
+    show_stats_table: bool = True,
+):
     """
-    Create a bar chart of time from disaster to construction start by segment,
-    showing median with 25th and 75th percentile as error bars.
+    Box plot of time from disaster to construction start by segment (years),
+    one observation per **permit** in the pooled list (single run or merged runs).
 
-    Args:
-        permits: List of Permit objects
-        figsize: Figure size tuple
+    For Monte Carlo uncertainty across runs, prefer passing run-partitioned permits
+    elsewhere; this helper stays permit-level for backward compatibility.
     """
     from permit_simulation import Segment
 
@@ -880,7 +930,6 @@ def plot_total_time_by_segment_quartiles(permits: List[Permit], figsize=(10, 6))
         print("No data to plot for total time by segment.")
         return None, None
 
-    # Enforce a stable segment order so bars and labels always align.
     segment_order = [
         Segment.CUSTOM_LIKE,
         Segment.PRE_APPROVED_LIKE,
@@ -900,41 +949,53 @@ def plot_total_time_by_segment_quartiles(permits: List[Permit], figsize=(10, 6))
 
     segments = [s for s in segment_order if s in segment_data]
     labels = [label_by_segment[s] for s in segments]
-
-    medians = [np.median(segment_data[s]) for s in segments]
-    p25 = [np.percentile(segment_data[s], 25) for s in segments]
-    p75 = [np.percentile(segment_data[s], 75) for s in segments]
-
-    # Asymmetric error bars: lower = median - p25, upper = p75 - median
-    yerr_lower = [medians[i] - p25[i] for i in range(len(segments))]
-    yerr_upper = [p75[i] - medians[i] for i in range(len(segments))]
-    yerr = [yerr_lower, yerr_upper]
+    data = [segment_data[s] for s in segments]
 
     fig, ax = plt.subplots(figsize=figsize)
-    colors = ['#1565C0', '#2E7D32', '#EF6C00', '#90CAF9', '#81C784' , '#FFB74D']
-    x = np.arange(len(segments))
-    bars = ax.bar(x, medians, yerr=yerr, capsize=5, color=colors[:len(segments)], alpha=0.8, edgecolor='black')
-
-    # Overlay outlier points (above 75th percentile only) in a straight line
-    for i, s in enumerate(segments):
-        times = np.array(segment_data[s])
-        outliers = times[times > p75[i]]
-        if len(outliers) > 0:
-            ax.scatter(np.full(len(outliers), x[i]), outliers, color='black', alpha=0.4, s=20, zorder=5)
+    colors = ["#1565C0", "#2E7D32", "#EF6C00", "#90CAF9", "#81C784", "#FFB74D"]
+    bp = ax.boxplot(
+        data,
+        patch_artist=True,
+        vert=True,
+        showfliers=True,
+        whis=1.5,
+    )
+    for patch, color in zip(bp["boxes"], colors[: len(segments)]):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.85)
+        patch.set_edgecolor("black")
 
     one_year = 1
-    ax.axhline(y=one_year, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
-    ax.text(1.02, one_year, ' 1 Year', transform=ax.get_yaxis_transform(), ha='left', va='center',
-            fontsize=10, color='gray', alpha=0.8)
+    ax.axhline(y=one_year, color="gray", linestyle="--", linewidth=1.5, alpha=0.7)
+    ax.text(
+        1.02,
+        one_year,
+        " 1 Year",
+        transform=ax.get_yaxis_transform(),
+        ha="left",
+        va="center",
+        fontsize=10,
+        color="gray",
+        alpha=0.8,
+    )
 
-    ax.set_ylabel('Time from Disaster to Construction Start (years)', fontsize=12)
-    ax.set_title('Time from Disaster to Construction Start by Segment (Median, 25th–75th percentiles)', fontsize=14, fontweight='bold')
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45, ha='right')
-    ax.grid(axis='y', alpha=0.3)
+    ax.set_ylabel("Time from Disaster to Construction Start (years)", fontsize=12)
+    ax.set_title(
+        "Time from Disaster to Construction Start by Segment (box plot)",
+        fontsize=14,
+        fontweight="bold",
+    )
+    ax.set_xticks(np.arange(1, len(segments) + 1))
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.grid(axis="y", alpha=0.3)
     ax.set_ylim(bottom=0)
 
     plt.tight_layout()
+    _show_boxplot_stats_table(
+        list(zip(labels, data)),
+        heading="Total time disaster → construction by segment (years)",
+        enabled=show_stats_table,
+    )
     return fig, ax
 
 
@@ -942,17 +1003,30 @@ def plot_median_total_time_by_process(
     permits_by_process: dict,
     figsize=(12, 6),
     title: Optional[str] = None,
+    *,
+    application_to_ready: bool = False,
+    ax: Optional[Axes] = None,
+    legend: bool = True,
+    show_stats_table: Optional[bool] = None,
 ):
     """
-    Create a grouped bar chart of median total time (disaster to construction start)
-    by segment for Standard, Sequential, and Parallel process.
+    Grouped box plots by segment.
 
-    Args:
-        permits_by_process: Dict mapping process name (e.g. "Standard", "Sequential", "Parallel")
-            to list of completed Permit objects.
-        figsize: Figure size tuple.
-        title: Optional plot title; defaults to a generic label if None.
+    - ``application_to_ready=False`` (default): total time disaster → construction.
+    - ``application_to_ready=True``: plan application (``planning_request``) →
+      ``ready_for_construction``.
+
+    If each dict value is ``list[list[Permit]]`` (one inner list per Monte Carlo run),
+    each box summarizes **within-run medians** across permits in that segment, with
+    whiskers across **runs**. Flat ``list[Permit]`` values use **per-permit** times.
+
+    Pass ``ax`` to draw into an existing subplot (skips ``tight_layout`` on the figure).
+    Set ``legend=False`` when combining several subplots and adding a figure-level legend.
+    ``show_stats_table``: if ``None`` (default), a summary table is shown only when this
+    call creates the figure (``ax`` was not passed). Pass ``True`` or ``False`` to override.
     """
+    from simulation_plot_helpers import values_are_run_lists
+
     from permit_simulation import Segment
 
     segment_order = [
@@ -963,36 +1037,66 @@ def plot_median_total_time_by_process(
         Segment.PRE_APPROVED_NON_LIKE,
         Segment.SELF_CERT_NON_LIKE,
     ]
+    label_by_segment = {
+        Segment.CUSTOM_LIKE: "Custom like",
+        Segment.PRE_APPROVED_LIKE: "Pre-approved like",
+        Segment.SELF_CERT_LIKE: "Self-certified like",
+        Segment.CUSTOM_NON_LIKE: "Custom non-like",
+        Segment.PRE_APPROVED_NON_LIKE: "Pre-approved non-like",
+        Segment.SELF_CERT_NON_LIKE: "Self-certified non-like",
+    }
 
-    # Build median total time per (process, segment)
-    # permits_by_process: {"Standard": [permits], "Sequential": [permits], "Parallel": [permits]}
     process_names = list(permits_by_process.keys())
-    medians = {pname: {} for pname in process_names}
+    partitioned = values_are_run_lists(permits_by_process)
+    owns_figure = ax is None
+    if show_stats_table is None:
+        show_stats_table = owns_figure
+    if owns_figure:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
 
-    for pname, permits in permits_by_process.items():
-        for seg in segment_order:
-            times = [
-                p.ready_for_construction - p.created_at
-                for p in permits
-                if p.segment == seg and p.ready_for_construction is not None
-            ]
-            medians[pname][seg] = float(np.median(times)) if times else np.nan
+    def _time_days(p) -> Optional[float]:
+        if application_to_ready:
+            if p.ready_for_construction is None or p.planning_request is None:
+                return None
+            return float(p.ready_for_construction - p.planning_request)
+        if p.ready_for_construction is None:
+            return None
+        return float(p.ready_for_construction - p.created_at)
 
-    # Only include segments that have at least one non-NaN median across processes
+    def _series_for_process_segment(pname: str, seg: Segment) -> list[float]:
+        bucket = permits_by_process[pname]
+        if partitioned:
+            pts: list[float] = []
+            for run_ps in bucket:
+                times = [
+                    t
+                    for p in run_ps
+                    if getattr(p, "segment", None) == seg and (t := _time_days(p)) is not None
+                ]
+                if times:
+                    pts.append(float(np.median(times)))
+            return pts
+        times = [
+            t
+            for p in bucket
+            if getattr(p, "segment", None) == seg and (t := _time_days(p)) is not None
+        ]
+        return times
+
     segments_to_plot = [
-        seg for seg in segment_order
-        if any(not np.isnan(medians[p].get(seg, np.nan)) for p in process_names)
+        seg
+        for seg in segment_order
+        if any(len(_series_for_process_segment(p, seg)) > 0 for p in process_names)
     ]
     if not segments_to_plot:
         print("No segment data to plot.")
+        if owns_figure:
+            plt.close(fig)
         return None, None
 
-    labels = ["Custom like", "Pre-approved like", "Self-certified like", "Custom non-like", "Pre-approved non-like", "Self-certified non-like"]
-    x = np.arange(len(labels))
-    width = 0.25
-    n_processes = len(process_names)
-
-    fig, ax = plt.subplots(figsize=figsize)
+    plot_labels = [label_by_segment[s] for s in segments_to_plot]
 
     colors = {
         "Standard": "#1976D2",
@@ -1001,28 +1105,108 @@ def plot_median_total_time_by_process(
         "Initial AI Check": "#F57C00",
         "Full AI Review": "#388E3C",
     }
-    for i, pname in enumerate(process_names):
-        offset = width * (i - (n_processes - 1) / 2)
-        values = [medians[pname].get(seg, np.nan) for seg in segments_to_plot]
-        values = [v if not np.isnan(v) else 0 for v in values]
-        color = colors.get(pname, "#888888")
-        ax.bar(x + offset, values, width, label=pname, color=color, alpha=0.85, edgecolor="black", linewidth=0.5)
 
-    ax.set_ylabel("Median total time (days)", fontsize=12)
+    n_proc = len(process_names)
+    stride = n_proc + 0.65
+    data_plot: list[list[float]] = []
+    box_labels: list[str] = []
+    positions_plot: list[float] = []
+    facecolors: list[str] = []
+
+    for j, seg in enumerate(segments_to_plot):
+        base = j * stride
+        for i, pname in enumerate(process_names):
+            pts = _series_for_process_segment(pname, seg)
+            if not pts:
+                continue
+            data_plot.append(pts)
+            box_labels.append(f"{pname} | {label_by_segment[seg]}")
+            positions_plot.append(base + i)
+            facecolors.append(colors.get(pname, "#888888"))
+
+    if not data_plot:
+        print("No segment data to plot.")
+        if owns_figure:
+            plt.close(fig)
+        return None, None
+
+    bp = ax.boxplot(
+        data_plot,
+        positions=positions_plot,
+        widths=min(0.42, 0.75 / max(n_proc, 1)),
+        patch_artist=True,
+        showfliers=True,
+        whis=1.5,
+    )
+    for patch, fc in zip(bp["boxes"], facecolors):
+        patch.set_facecolor(fc)
+        patch.set_alpha(0.85)
+        patch.set_edgecolor("black")
+
+    ax.set_ylabel(
+        (
+            "Application → ready (days); within-run median across runs"
+            if application_to_ready
+            else "Total time disaster → construction (days); within-run median across runs"
+        )
+        if partitioned
+        else (
+            "Application → ready (days); per permit"
+            if application_to_ready
+            else "Total time disaster → construction (days); per permit"
+        ),
+        fontsize=11,
+    )
     ax.set_xlabel("Segment", fontsize=12)
     ax.set_title(
         title
         if title is not None
-        else "Median total time from disaster to construction start by segment",
+        else (
+            (
+                "Time from plan application to ready for construction by segment"
+                + (" (run-level medians)" if partitioned else " (per permit)")
+            )
+            if application_to_ready
+            else (
+                "Total time from disaster to construction start by segment"
+                + (" (run-level medians)" if partitioned else " (per permit)")
+            )
+        ),
         fontsize=14,
         fontweight="bold",
     )
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45, ha="right")
-    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=11)
+    ax.set_xticks([j * stride + (n_proc - 1) / 2 for j in range(len(segments_to_plot))])
+    ax.set_xticklabels(plot_labels, rotation=45, ha="right")
+    if legend:
+        ax.legend(
+            handles=[
+                mpatches.Patch(facecolor=colors.get(p, "#888"), alpha=0.85, edgecolor="black")
+                for p in process_names
+            ],
+            labels=process_names,
+            loc="upper left",
+            bbox_to_anchor=(1.02, 1),
+            fontsize=11,
+        )
     ax.grid(axis="y", alpha=0.3)
 
-    plt.tight_layout()
+    stats_heading = (
+        title
+        if title is not None
+        else (
+            "Application → ready by segment (days)"
+            if application_to_ready
+            else "Total time disaster → construction by segment (days)"
+        )
+    )
+    _show_boxplot_stats_table(
+        list(zip(box_labels, data_plot)),
+        heading=stats_heading,
+        enabled=show_stats_table,
+    )
+
+    if owns_figure:
+        plt.tight_layout()
     return fig, ax
 
 
@@ -1033,44 +1217,38 @@ def plot_average_waiting_and_service_by_step(
     ax: Optional[Axes] = None,
     title: Optional[str] = None,
     silent: bool = False,
+    runs: Optional[List[List[Permit]]] = None,
     *,
     title_size: Optional[float] = None,
     axis_label_size: Optional[float] = None,
     tick_label_size: Optional[float] = None,
     legend_size: Optional[float] = None,
     bar_value_size: Optional[float] = None,
+    show_stats_table: bool = True,
 ):
     """
-    Bar chart of average waiting vs service time by process step.
+    Box plots of waiting vs service time by process step.
 
-    Uses the same *types* of labels as a standard process chart:
-    - Title: average waiting vs service by process step
-    - Y-axis: average time (days)
-    - X-axis: process step
-    - Legend: Waiting (gray) vs Service (green)
+    - If ``runs`` is ``None`` (default), each box uses **per-permit** times for the
+      pooled ``permits`` list (spread across permits in that pool).
+    - If ``runs`` is a list of per-run permit lists, each box summarizes **within-run
+      mean** times across permits for that step, with whiskers across **runs**.
 
-    Step *names* stay as your internal keys unless you pass ``label_map``
-    (optional display strings only—you do not need to match any fixed list).
-
-    Returns:
-        (fig, ax) or (None, None) if there is nothing to plot.
-
-    If ``ax`` is provided, draws on that axes only (caller supplies figure layout /
-    ``tight_layout``). ``title`` overrides the default chart title when given.
-    Set ``silent=True`` to skip printed step summaries (useful for subplot grids).
-
-    Optional font sizes (points) override the default standalone vs subplot sizing
-    when provided.
+    Step names stay as internal keys unless you pass ``label_map`` for display labels.
+    Pass ``show_stats_table=False`` to skip the printed summary table for each box series.
     """
-    if not permits:
+    if not permits and not runs:
         print("No permits provided for waiting/service by step chart.")
         return None, None
 
-    # Accumulate per-step waiting and service times across permits
-    step_waiting = {}
-    step_service = {}
+    pool = permits
+    if runs:
+        pool = [p for run in runs for p in run]
 
-    for permit in permits:
+    step_waiting: dict = {}
+    step_service: dict = {}
+
+    for permit in pool:
         totals = calculate_step_waiting_service_totals(permit)
         for step_name, values in totals.items():
             step_waiting.setdefault(step_name, []).append(values["waiting"])
@@ -1080,7 +1258,6 @@ def plot_average_waiting_and_service_by_step(
         print("No step data found for waiting/service chart.")
         return None, None
 
-    # Process-flow order; only steps that appear in the data are plotted
     preferred_order = [
         "EPA Debris",
         "USACE Debris",
@@ -1101,10 +1278,38 @@ def plot_average_waiting_and_service_by_step(
     label_map = label_map or {}
     display_labels = [label_map.get(s, s) for s in steps]
 
-    waiting_means = [np.mean(step_waiting[s]) for s in steps]
-    waiting_stds = [np.std(step_waiting[s]) for s in steps]
-    service_means = [np.mean(step_service.get(s, [0.0])) for s in steps]
-    service_stds = [np.std(step_service.get(s, [0.0])) for s in steps]
+    def _run_means_for_step(step: str) -> tuple[list[float], list[float]]:
+        w_run: list[float] = []
+        s_run: list[float] = []
+        for run_ps in runs or []:
+            wvals: list[float] = []
+            svals: list[float] = []
+            for permit in run_ps:
+                totals = calculate_step_waiting_service_totals(permit)
+                if step not in totals:
+                    continue
+                wvals.append(float(totals[step]["waiting"]))
+                svals.append(float(totals[step]["service"]))
+            if wvals:
+                w_run.append(float(np.mean(wvals)))
+                s_run.append(float(np.mean(svals)))
+        return w_run, s_run
+
+    waiting_series: list[list[float]] = []
+    service_series: list[list[float]] = []
+    for s in steps:
+        if runs:
+            w_run, s_run = _run_means_for_step(s)
+            waiting_series.append(w_run)
+            service_series.append(s_run)
+        else:
+            waiting_series.append([float(x) for x in step_waiting[s]])
+            service_series.append([float(x) for x in step_service.get(s, [0.0])])
+
+    waiting_means = [np.mean(w) if w else 0.0 for w in waiting_series]
+    waiting_stds = [np.std(w, ddof=1) if len(w) > 1 else 0.0 for w in waiting_series]
+    service_means = [np.mean(w) if w else 0.0 for w in service_series]
+    service_stds = [np.std(w, ddof=1) if len(w) > 1 else 0.0 for w in service_series]
 
     x = np.arange(len(steps))
     width = 0.35
@@ -1115,39 +1320,85 @@ def plot_average_waiting_and_service_by_step(
     else:
         fig = ax.figure
 
-    bars_wait = ax.bar(
-        x - width / 2,
-        waiting_means,
-        width,
-        label="Waiting",
-        color="#BDBDBD",
-        edgecolor="black",
-    )
-    bars_service = ax.bar(
-        x + width / 2,
-        service_means,
-        width,
-        label="Service",
-        color="#81C784",
-        edgecolor="black",
-    )
-
     default_title = 14 if standalone else 10
     default_axis = 12 if standalone else 9
     default_tick = 10 if standalone else 7
     default_legend = 11 if standalone else 7
-    default_bar_val = 8
 
+    pos_wait = (x - width / 2).tolist()
+    pos_srv = (x + width / 2).tolist()
+    if any(waiting_series) or any(service_series):
+        bw = min(0.28, 0.7 / max(len(steps), 1))
+        bp_w = ax.boxplot(
+            waiting_series,
+            positions=pos_wait,
+            widths=bw,
+            patch_artist=True,
+            showfliers=True,
+            whis=1.5,
+            labels=[""] * len(steps),
+        )
+        bp_s = ax.boxplot(
+            service_series,
+            positions=pos_srv,
+            widths=bw,
+            patch_artist=True,
+            showfliers=True,
+            whis=1.5,
+            labels=[""] * len(steps),
+        )
+        for b in bp_w["boxes"]:
+            b.set_facecolor("#BDBDBD")
+            b.set_alpha(0.9)
+            b.set_edgecolor("black")
+        for b in bp_s["boxes"]:
+            b.set_facecolor("#81C784")
+            b.set_alpha(0.9)
+            b.set_edgecolor("black")
+        from matplotlib.lines import Line2D
+
+        legend_elements = [
+            Line2D(
+                [0],
+                [0],
+                marker="s",
+                color="w",
+                markerfacecolor="#BDBDBD",
+                markersize=11,
+                markeredgecolor="black",
+                label="Waiting",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="s",
+                color="w",
+                markerfacecolor="#81C784",
+                markersize=11,
+                markeredgecolor="black",
+                label="Service",
+            ),
+        ]
+        ax.legend(
+            handles=legend_elements,
+            loc="upper right",
+            fontsize=legend_size if legend_size is not None else default_legend,
+            framealpha=0.95,
+        )
+
+    default_title_text = (
+        "Waiting vs service by process step (within-run mean across runs)"
+        if runs
+        else "Waiting vs service by process step (per permit)"
+    )
     ax.set_title(
-        title
-        if title is not None
-        else "Average Total Waiting vs Service Time by Process Step",
+        title if title is not None else default_title_text,
         fontsize=title_size if title_size is not None else default_title,
         fontweight="bold",
         pad=12 if standalone else 6,
     )
     ax.set_ylabel(
-        "Average Time (days)",
+        "Time (days)",
         fontsize=axis_label_size if axis_label_size is not None else default_axis,
     )
     ax.set_xlabel(
@@ -1162,40 +1413,37 @@ def plot_average_waiting_and_service_by_step(
         fontsize=tick_label_size if tick_label_size is not None else default_tick,
     )
     ax.tick_params(axis="y", labelsize=tick_label_size if tick_label_size is not None else default_tick)
-    ax.legend(
-        loc="upper right",
-        fontsize=legend_size if legend_size is not None else default_legend,
-        framealpha=0.95,
-    )
     ax.grid(axis="y", alpha=0.35, linestyle="-", color="#BDBDBD")
     ax.set_axisbelow(True)
 
-    ymax = max(max(waiting_means + [0]), max(service_means + [0]))
+    def _max_nested(series: list[list[float]]) -> float:
+        m = 0.0
+        for w in series:
+            if w:
+                m = max(m, float(max(w)))
+        return m
+
+    ymax = max(_max_nested(waiting_series), _max_nested(service_series))
     if ymax > 0:
         ax.set_ylim(0, ymax * 1.12)
 
-    # Value labels above bars (skip clutter when bar is tiny)
-    for bar in list(bars_wait) + list(bars_service):
-        height = bar.get_height()
-        if height < 0.05:
-            continue
-        ax.text(
-            bar.get_x() + bar.get_width() / 2.0,
-            height,
-            f"{height:.1f}",
-            ha="center",
-            va="bottom",
-            fontsize=bar_value_size if bar_value_size is not None else default_bar_val,
-        )
+    stats_pairs: List[tuple[str, Sequence[float]]] = []
+    for dl, ws, ss in zip(display_labels, waiting_series, service_series):
+        stats_pairs.append((f"{dl} — waiting", ws))
+        stats_pairs.append((f"{dl} — service", ss))
+    _show_boxplot_stats_table(
+        stats_pairs,
+        heading=title if title is not None else default_title_text,
+        enabled=show_stats_table,
+    )
 
     if not silent:
-        print("Average waiting and service time by step (days):")
+        print("Waiting / service by step (days); summary of plotted series:")
         for step, w_mean, w_std, s_mean, s_std in zip(
             steps, waiting_means, waiting_stds, service_means, service_stds
         ):
             print(
-                f"  {step}: "
-                f"waiting mean={w_mean:.2f}, σ={w_std:.2f}; "
+                f"  {step}: waiting mean={w_mean:.2f}, σ={w_std:.2f}; "
                 f"service mean={s_mean:.2f}, σ={s_std:.2f}"
             )
 
