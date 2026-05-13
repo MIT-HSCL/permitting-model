@@ -1,5 +1,10 @@
 """
-Helpers for Monte Carlo visualization: within-run aggregates, then boxplots across runs.
+Helpers for Monte Carlo visualization.
+
+**Monte Carlo permit plots:** you can either pool **all permit-level observations across
+runs** and take one Tukey box (``pooled_tukey_boxplot_stats``), or (for policy levers)
+compute a Tukey box per run and **average** those endpoints across runs
+(``mean_bxp_stats_across_runs`` — see ``policy_lever_impact_analysis``).
 
 Gantt-style horizontal bars (durations on a timeline) are not statistical summaries and
 should stay as ``barh`` — use these helpers only for outcome distributions across runs.
@@ -105,6 +110,134 @@ def show_boxplot_stats_table(
         display(df)
     except Exception:
         # noqa: T201 — intentional fallback when IPython is not available
+        print(df.to_string(index=False))
+    return df
+
+
+def tukey_boxplot_stats_from_values(
+    values: Sequence[float],
+    *,
+    whis: float = 1.5,
+) -> dict[str, float]:
+    """
+    Tukey box endpoints for one sample (e.g. one run's permit-level durations).
+
+    Uses the same IQR whisker rule as ``policy_lever_impact_analysis`` (1.5×IQR, whiskers
+    at the most extreme points inside the fences).
+    """
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return {"q1": float("nan"), "med": float("nan"), "q3": float("nan"), "whislo": float("nan"), "whishi": float("nan")}
+    q1 = float(np.percentile(arr, 25))
+    med = float(np.median(arr))
+    q3 = float(np.percentile(arr, 75))
+    iqr = q3 - q1
+    lower_bound = q1 - whis * iqr
+    upper_bound = q3 + whis * iqr
+    whislo = float(arr[arr >= lower_bound].min())
+    whishi = float(arr[arr <= upper_bound].max())
+    return {"q1": q1, "med": med, "q3": q3, "whislo": whislo, "whishi": whishi}
+
+
+def mean_bxp_stats_across_runs(
+    run_observations: Sequence[Sequence[float]],
+    *,
+    whis: float = 1.5,
+) -> dict[str, float]:
+    """
+    For each inner sequence (one run's observations), compute Tukey box stats, then take
+    the **arithmetic mean** of Q1, median, Q3, and whisker endpoints across runs — matching
+    the policy intervention comparison aggregation.
+
+    Returns keys ``q1``, ``med``, ``q3``, ``whislo``, ``whishi``, and ``n_runs`` (number of
+    runs that contributed a finite box).
+    """
+    per_run: list[dict[str, float]] = []
+    for vals in run_observations:
+        st = tukey_boxplot_stats_from_values(vals, whis=whis)
+        if all(np.isfinite(float(st[k])) for k in ("q1", "med", "q3", "whislo", "whishi")):
+            per_run.append(st)
+    if not per_run:
+        return {
+            "q1": float("nan"),
+            "med": float("nan"),
+            "q3": float("nan"),
+            "whislo": float("nan"),
+            "whishi": float("nan"),
+            "n_runs": 0.0,
+        }
+    keys = ("q1", "med", "q3", "whislo", "whishi")
+    out = {k: float(np.nanmean([s[k] for s in per_run])) for k in keys}
+    out["n_runs"] = float(len(per_run))
+    return out
+
+
+def pooled_tukey_boxplot_stats(
+    run_observations: Sequence[Sequence[float]],
+    *,
+    whis: float = 1.5,
+) -> dict[str, Any]:
+    """
+    Concatenate all inner sequences (e.g. one list per Monte Carlo run) and compute a
+    single Tukey box on the **pooled** sample. Typical size is (runs × permits) when each
+    run contributes one value per permit.
+
+    Returns ``q1``, ``med``, ``q3``, ``whislo``, ``whishi`` like ``tukey_boxplot_stats_from_values``,
+    plus ``n`` = number of pooled values.
+    """
+    pooled: list[float] = [float(x) for seq in run_observations for x in seq]
+    st = tukey_boxplot_stats_from_values(pooled, whis=whis)
+    return {**st, "n": int(len(pooled))}
+
+
+def aggregate_bxp_stats_dataframe(rows: Sequence[Mapping[str, Any]]) -> Any:
+    """DataFrame for tables of Tukey box endpoints (one row per box): ``n`` = pooled count, ``n_runs`` = run count."""
+    pd = _pandas()
+    cols = ["series", "n", "n_runs", "q1", "median", "q3", "whisker_low", "whisker_high"]
+    if not rows:
+        return pd.DataFrame(columns=cols)
+    norm: list[dict[str, Any]] = []
+    for r in rows:
+        norm.append(
+            {
+                "series": r.get("series", ""),
+                "n": int(r.get("n", 0)),
+                "n_runs": int(r.get("n_runs", 0)),
+                "q1": r.get("q1"),
+                "median": r.get("median"),
+                "q3": r.get("q3"),
+                "whisker_low": r.get("whisker_low"),
+                "whisker_high": r.get("whisker_high"),
+            }
+        )
+    return pd.DataFrame(norm)
+
+
+def show_aggregate_bxp_stats_table(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    heading: Optional[str] = None,
+) -> Any:
+    """Display a table of Tukey box endpoints (pooled or mean-aggregated)."""
+    df = aggregate_bxp_stats_dataframe(list(rows))
+    if df.empty:
+        if heading:
+            print(heading)
+        print("(No aggregate box rows to display.)")
+        return df
+    if heading:
+        try:
+            from IPython.display import Markdown, display
+
+            display(Markdown(f"**{heading}**"))
+        except Exception:
+            print(heading)
+    try:
+        from IPython.display import display
+
+        display(df)
+    except Exception:
         print(df.to_string(index=False))
     return df
 

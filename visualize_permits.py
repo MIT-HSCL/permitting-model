@@ -31,6 +31,19 @@ def _show_boxplot_stats_table(
     show_boxplot_stats_table(nonempty, heading=heading)
 
 
+def _show_aggregate_bxp_stats_table(
+    rows: List[dict],
+    *,
+    heading: Optional[str],
+    enabled: bool,
+) -> None:
+    if not enabled or not rows:
+        return
+    from simulation_plot_helpers import show_aggregate_bxp_stats_table
+
+    show_aggregate_bxp_stats_table(rows, heading=heading)
+
+
 DEFAULT_GANTT_COLORS = {
     "EPA Debris (waiting)": "#B3E5FC",      # Light blue (waiting state)
     "EPA Debris (service)": "#0288D1",      # Darker blue (active state)
@@ -1005,6 +1018,7 @@ def plot_median_total_time_by_process(
     title: Optional[str] = None,
     *,
     application_to_ready: bool = False,
+    ylabel: Optional[str] = None,
     ax: Optional[Axes] = None,
     legend: bool = True,
     show_stats_table: Optional[bool] = None,
@@ -1017,15 +1031,19 @@ def plot_median_total_time_by_process(
       ``ready_for_construction``.
 
     If each dict value is ``list[list[Permit]]`` (one inner list per Monte Carlo run),
-    each box summarizes **within-run medians** across permits in that segment, with
-    whiskers across **runs**. Flat ``list[Permit]`` values use **per-permit** times.
+    all **permit-level** times in that segment are **pooled across runs** (sample size
+    is the total number of permit observations), and one Tukey box is computed on that
+    pooled sample and drawn with ``bxp``. Flat ``list[Permit]`` is the same with a single
+    run's worth of permits.
 
     Pass ``ax`` to draw into an existing subplot (skips ``tight_layout`` on the figure).
     Set ``legend=False`` when combining several subplots and adding a figure-level legend.
     ``show_stats_table``: if ``None`` (default), a summary table is shown only when this
     call creates the figure (``ax`` was not passed). Pass ``True`` or ``False`` to override.
+    ``ylabel``: if set, replaces the default y-axis label derived from ``application_to_ready``
+    and whether runs are pooled.
     """
-    from simulation_plot_helpers import values_are_run_lists
+    from simulation_plot_helpers import pooled_tukey_boxplot_stats, values_are_run_lists
 
     from permit_simulation import Segment
 
@@ -1048,6 +1066,8 @@ def plot_median_total_time_by_process(
 
     process_names = list(permits_by_process.keys())
     partitioned = values_are_run_lists(permits_by_process)
+    n_runs_max = max((len(permits_by_process[p]) for p in process_names), default=0)
+    multi_run_partitioned = partitioned and n_runs_max > 1
     owns_figure = ax is None
     if show_stats_table is None:
         show_stats_table = owns_figure
@@ -1065,30 +1085,47 @@ def plot_median_total_time_by_process(
             return None
         return float(p.ready_for_construction - p.created_at)
 
-    def _series_for_process_segment(pname: str, seg: Segment) -> list[float]:
+    def _per_run_value_lists(pname: str, seg: Segment) -> list[list[float]]:
+        out: list[list[float]] = []
+        for run_ps in permits_by_process[pname]:
+            times = [
+                float(t)
+                for p in run_ps
+                if getattr(p, "segment", None) == seg and (t := _time_days(p)) is not None
+            ]
+            if times:
+                out.append(times)
+        return out
+
+    def _flat_value_list(pname: str, seg: Segment) -> list[float]:
         bucket = permits_by_process[pname]
         if partitioned:
-            pts: list[float] = []
+            times: list[float] = []
             for run_ps in bucket:
-                times = [
-                    t
-                    for p in run_ps
-                    if getattr(p, "segment", None) == seg and (t := _time_days(p)) is not None
-                ]
-                if times:
-                    pts.append(float(np.median(times)))
-            return pts
-        times = [
-            t
+                for p in run_ps:
+                    if getattr(p, "segment", None) != seg:
+                        continue
+                    t = _time_days(p)
+                    if t is not None:
+                        times.append(float(t))
+            return times
+        return [
+            float(t)
             for p in bucket
             if getattr(p, "segment", None) == seg and (t := _time_days(p)) is not None
         ]
-        return times
 
     segments_to_plot = [
         seg
         for seg in segment_order
-        if any(len(_series_for_process_segment(p, seg)) > 0 for p in process_names)
+        if any(
+            (
+                len(_per_run_value_lists(p, seg)) > 0
+                if partitioned
+                else len(_flat_value_list(p, seg)) > 0
+            )
+            for p in process_names
+        )
     ]
     if not segments_to_plot:
         print("No segment data to plot.")
@@ -1098,17 +1135,24 @@ def plot_median_total_time_by_process(
 
     plot_labels = [label_by_segment[s] for s in segments_to_plot]
 
+    # Align with policy_lever_impact_analysis "Policy Intervention Comparison" palette:
+    # Baseline (standard) gray, sequential dark green, parallel light green; AI rows use blues.
     colors = {
-        "Standard": "#1976D2",
-        "Sequential": "#F57C00",
-        "Parallel": "#388E3C",
-        "Initial AI Check": "#F57C00",
-        "Full AI Review": "#388E3C",
+        "Standard": "#4d4d4d",
+        "Sequential": "#238b45",
+        "Parallel": "#74c476",
+        "Initial AI Check": "#2171b5",
+        "Full AI Review": "#9ecae1",
     }
 
     n_proc = len(process_names)
-    stride = n_proc + 0.65
-    data_plot: list[list[float]] = []
+    # Within each segment, process box centers are 1 unit apart (base, base+1, …).
+    # Use that full span for box width so adjacent process boxes touch edge-to-edge.
+    intra_center_spacing = 1.0
+    stride = n_proc * intra_center_spacing + 0.65
+    box_width = intra_center_spacing
+    bxp_stats_list: list[dict] = []
+    aggregate_table_rows: list[dict] = []
     box_labels: list[str] = []
     positions_plot: list[float] = []
     facecolors: list[str] = []
@@ -1116,67 +1160,115 @@ def plot_median_total_time_by_process(
     for j, seg in enumerate(segments_to_plot):
         base = j * stride
         for i, pname in enumerate(process_names):
-            pts = _series_for_process_segment(pname, seg)
-            if not pts:
+            if partitioned:
+                pr_lists = _per_run_value_lists(pname, seg)
+            else:
+                pts = _flat_value_list(pname, seg)
+                pr_lists = [pts] if pts else []
+            if not pr_lists:
                 continue
-            data_plot.append(pts)
+            ms = pooled_tukey_boxplot_stats(pr_lists, whis=1.5)
+            if not np.isfinite(ms["med"]):
+                continue
+            bxp_stats_list.append(
+                {
+                    "med": ms["med"],
+                    "q1": ms["q1"],
+                    "q3": ms["q3"],
+                    "whislo": ms["whislo"],
+                    "whishi": ms["whishi"],
+                    "fliers": [],
+                }
+            )
+            aggregate_table_rows.append(
+                {
+                    "series": f"{pname} | {label_by_segment[seg]}",
+                    "n": ms["n"],
+                    "n_runs": len(permits_by_process[pname]) if partitioned else 1,
+                    "q1": ms["q1"],
+                    "median": ms["med"],
+                    "q3": ms["q3"],
+                    "whisker_low": ms["whislo"],
+                    "whisker_high": ms["whishi"],
+                }
+            )
             box_labels.append(f"{pname} | {label_by_segment[seg]}")
-            positions_plot.append(base + i)
+            positions_plot.append(base + i * intra_center_spacing)
             facecolors.append(colors.get(pname, "#888888"))
 
-    if not data_plot:
+    if not bxp_stats_list:
         print("No segment data to plot.")
         if owns_figure:
             plt.close(fig)
         return None, None
 
-    bp = ax.boxplot(
-        data_plot,
+    bp = ax.bxp(
+        bxp_stats_list,
         positions=positions_plot,
-        widths=min(0.42, 0.75 / max(n_proc, 1)),
+        widths=box_width,
         patch_artist=True,
-        showfliers=True,
-        whis=1.5,
+        showfliers=False,
     )
     for patch, fc in zip(bp["boxes"], facecolors):
         patch.set_facecolor(fc)
         patch.set_alpha(0.85)
         patch.set_edgecolor("black")
 
-    ax.set_ylabel(
+    _default_ylabel = (
         (
-            "Application → ready (days); within-run median across runs"
+            "Application → ready (days); Tukey box on all permits (runs pooled)"
             if application_to_ready
-            else "Total time disaster → construction (days); within-run median across runs"
+            else "Total time disaster → construction (days); Tukey box on all permits (runs pooled)"
         )
-        if partitioned
+        if multi_run_partitioned
         else (
-            "Application → ready (days); per permit"
+            "Application → ready (days); Tukey box from permit-level times"
             if application_to_ready
-            else "Total time disaster → construction (days); per permit"
-        ),
-        fontsize=11,
+            else "Total time disaster → construction (days); Tukey box from permit-level times"
+        )
     )
-    ax.set_xlabel("Segment", fontsize=12)
+    ax.set_ylabel(ylabel if ylabel is not None else _default_ylabel, fontsize=11)
+    ax.set_xlabel("Permit Type", fontsize=12)
     ax.set_title(
         title
         if title is not None
         else (
             (
                 "Time from plan application to ready for construction by segment"
-                + (" (run-level medians)" if partitioned else " (per permit)")
+                + (
+                    " (all runs pooled)"
+                    if multi_run_partitioned
+                    else " (Tukey box, permit-level)"
+                )
             )
             if application_to_ready
             else (
                 "Total time from disaster to construction start by segment"
-                + (" (run-level medians)" if partitioned else " (per permit)")
+                + (
+                    " (all runs pooled)"
+                    if multi_run_partitioned
+                    else " (Tukey box, permit-level)"
+                )
             )
         ),
         fontsize=14,
         fontweight="bold",
     )
-    ax.set_xticks([j * stride + (n_proc - 1) / 2 for j in range(len(segments_to_plot))])
+    ax.set_xticks([j * stride + (n_proc - 1) * intra_center_spacing / 2 for j in range(len(segments_to_plot))])
     ax.set_xticklabels(plot_labels, rotation=45, ha="right")
+
+    def _set_segment_bxp_xlim() -> None:
+        # Pad past outer box edges (half box width + gap); old x_pad=0.5 sat flush on edges.
+        if not positions_plot:
+            return
+        half_w = box_width * 0.5
+        side_gap = 0.75
+        ax.set_xlim(
+            min(positions_plot) - half_w - side_gap,
+            max(positions_plot) + half_w + side_gap,
+        )
+
+    _set_segment_bxp_xlim()
     if legend:
         ax.legend(
             handles=[
@@ -1199,14 +1291,15 @@ def plot_median_total_time_by_process(
             else "Total time disaster → construction by segment (days)"
         )
     )
-    _show_boxplot_stats_table(
-        list(zip(box_labels, data_plot)),
+    _show_aggregate_bxp_stats_table(
+        aggregate_table_rows,
         heading=stats_heading,
         enabled=show_stats_table,
     )
 
     if owns_figure:
         plt.tight_layout()
+        _set_segment_bxp_xlim()
     return fig, ax
 
 
@@ -1227,15 +1320,14 @@ def plot_average_waiting_and_service_by_step(
     show_stats_table: bool = True,
 ):
     """
-    Box plots of waiting vs service time by process step.
+    Grouped **bar chart** of mean waiting vs mean service time by process step.
 
-    - If ``runs`` is ``None`` (default), each box uses **per-permit** times for the
-      pooled ``permits`` list (spread across permits in that pool).
-    - If ``runs`` is a list of per-run permit lists, each box summarizes **within-run
-      mean** times across permits for that step, with whiskers across **runs**.
+    Permit-level times are pooled into ``step_waiting`` / ``step_service`` (when ``runs``
+    is set, all runs are flattened into the same pool). Each bar shows the arithmetic
+    **mean** time for that step.
 
     Step names stay as internal keys unless you pass ``label_map`` for display labels.
-    Pass ``show_stats_table=False`` to skip the printed summary table for each box series.
+    Pass ``show_stats_table=False`` to skip the printed distribution summary table.
     """
     if not permits and not runs:
         print("No permits provided for waiting/service by step chart.")
@@ -1278,38 +1370,19 @@ def plot_average_waiting_and_service_by_step(
     label_map = label_map or {}
     display_labels = [label_map.get(s, s) for s in steps]
 
-    def _run_means_for_step(step: str) -> tuple[list[float], list[float]]:
-        w_run: list[float] = []
-        s_run: list[float] = []
-        for run_ps in runs or []:
-            wvals: list[float] = []
-            svals: list[float] = []
-            for permit in run_ps:
-                totals = calculate_step_waiting_service_totals(permit)
-                if step not in totals:
-                    continue
-                wvals.append(float(totals[step]["waiting"]))
-                svals.append(float(totals[step]["service"]))
-            if wvals:
-                w_run.append(float(np.mean(wvals)))
-                s_run.append(float(np.mean(svals)))
-        return w_run, s_run
+    use_multi_run_pooled = runs is not None and len(runs) > 1
 
-    waiting_series: list[list[float]] = []
-    service_series: list[list[float]] = []
+    waiting_means: list[float] = []
+    service_means: list[float] = []
+    waiting_stds: list[float] = []
+    service_stds: list[float] = []
     for s in steps:
-        if runs:
-            w_run, s_run = _run_means_for_step(s)
-            waiting_series.append(w_run)
-            service_series.append(s_run)
-        else:
-            waiting_series.append([float(x) for x in step_waiting[s]])
-            service_series.append([float(x) for x in step_service.get(s, [0.0])])
-
-    waiting_means = [np.mean(w) if w else 0.0 for w in waiting_series]
-    waiting_stds = [np.std(w, ddof=1) if len(w) > 1 else 0.0 for w in waiting_series]
-    service_means = [np.mean(w) if w else 0.0 for w in service_series]
-    service_stds = [np.std(w, ddof=1) if len(w) > 1 else 0.0 for w in service_series]
+        w = np.asarray(step_waiting[s], dtype=float)
+        sv = np.asarray(step_service[s], dtype=float)
+        waiting_means.append(float(np.mean(w)) if w.size else 0.0)
+        service_means.append(float(np.mean(sv)) if sv.size else 0.0)
+        waiting_stds.append(float(np.std(w, ddof=1)) if w.size > 1 else 0.0)
+        service_stds.append(float(np.std(sv, ddof=1)) if sv.size > 1 else 0.0)
 
     x = np.arange(len(steps))
     width = 0.35
@@ -1325,71 +1398,37 @@ def plot_average_waiting_and_service_by_step(
     default_tick = 10 if standalone else 7
     default_legend = 11 if standalone else 7
 
-    pos_wait = (x - width / 2).tolist()
-    pos_srv = (x + width / 2).tolist()
-    if any(waiting_series) or any(service_series):
-        bw = min(0.28, 0.7 / max(len(steps), 1))
-        bp_w = ax.boxplot(
-            waiting_series,
-            positions=pos_wait,
-            widths=bw,
-            patch_artist=True,
-            showfliers=True,
-            whis=1.5,
-            labels=[""] * len(steps),
+    if steps:
+        ax.bar(
+            x - width / 2,
+            waiting_means,
+            width,
+            label="Waiting",
+            color="#BDBDBD",
+            edgecolor="black",
+            linewidth=0.6,
+            alpha=0.95,
         )
-        bp_s = ax.boxplot(
-            service_series,
-            positions=pos_srv,
-            widths=bw,
-            patch_artist=True,
-            showfliers=True,
-            whis=1.5,
-            labels=[""] * len(steps),
+        ax.bar(
+            x + width / 2,
+            service_means,
+            width,
+            label="Service",
+            color="#81C784",
+            edgecolor="black",
+            linewidth=0.6,
+            alpha=0.95,
         )
-        for b in bp_w["boxes"]:
-            b.set_facecolor("#BDBDBD")
-            b.set_alpha(0.9)
-            b.set_edgecolor("black")
-        for b in bp_s["boxes"]:
-            b.set_facecolor("#81C784")
-            b.set_alpha(0.9)
-            b.set_edgecolor("black")
-        from matplotlib.lines import Line2D
-
-        legend_elements = [
-            Line2D(
-                [0],
-                [0],
-                marker="s",
-                color="w",
-                markerfacecolor="#BDBDBD",
-                markersize=11,
-                markeredgecolor="black",
-                label="Waiting",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="s",
-                color="w",
-                markerfacecolor="#81C784",
-                markersize=11,
-                markeredgecolor="black",
-                label="Service",
-            ),
-        ]
         ax.legend(
-            handles=legend_elements,
             loc="upper right",
             fontsize=legend_size if legend_size is not None else default_legend,
             framealpha=0.95,
         )
 
     default_title_text = (
-        "Waiting vs service by process step (within-run mean across runs)"
-        if runs
-        else "Waiting vs service by process step (per permit)"
+        "Average waiting vs service by process step (mean per permit; all runs pooled)"
+        if use_multi_run_pooled
+        else "Average waiting vs service by process step (mean per permit)"
     )
     ax.set_title(
         title if title is not None else default_title_text,
@@ -1416,21 +1455,23 @@ def plot_average_waiting_and_service_by_step(
     ax.grid(axis="y", alpha=0.35, linestyle="-", color="#BDBDBD")
     ax.set_axisbelow(True)
 
-    def _max_nested(series: list[list[float]]) -> float:
-        m = 0.0
-        for w in series:
-            if w:
-                m = max(m, float(max(w)))
-        return m
-
-    ymax = max(_max_nested(waiting_series), _max_nested(service_series))
+    ymax = max(max(waiting_means, default=0.0), max(service_means, default=0.0))
     if ymax > 0:
         ax.set_ylim(0, ymax * 1.12)
 
+    # Explicit x limits: margins() often leaves grouped bars flush with the y-axis / right spine.
+    if steps:
+        n = len(steps)
+        left_edge = float(-width / 2)
+        right_edge = float((n - 1) + width / 2)
+        span = max(right_edge - left_edge, 1e-9)
+        x_pad = max(width, 0.1 * span)
+        ax.set_xlim(left_edge - x_pad, right_edge + x_pad)
+
     stats_pairs: List[tuple[str, Sequence[float]]] = []
-    for dl, ws, ss in zip(display_labels, waiting_series, service_series):
-        stats_pairs.append((f"{dl} — waiting", ws))
-        stats_pairs.append((f"{dl} — service", ss))
+    for dl, s in zip(display_labels, steps):
+        stats_pairs.append((f"{dl} — waiting", step_waiting[s]))
+        stats_pairs.append((f"{dl} — service", step_service[s]))
     _show_boxplot_stats_table(
         stats_pairs,
         heading=title if title is not None else default_title_text,
@@ -1438,17 +1479,168 @@ def plot_average_waiting_and_service_by_step(
     )
 
     if not silent:
-        print("Waiting / service by step (days); summary of plotted series:")
-        for step, w_mean, w_std, s_mean, s_std in zip(
-            steps, waiting_means, waiting_stds, service_means, service_stds
+        print("Waiting / service by step (days); mean ± σ (pooled permit-level):")
+        for step, dl, wm, ws, sm, ss in zip(
+            steps, display_labels, waiting_means, waiting_stds, service_means, service_stds
         ):
             print(
-                f"  {step}: waiting mean={w_mean:.2f}, σ={w_std:.2f}; "
-                f"service mean={s_mean:.2f}, σ={s_std:.2f}"
+                f"  {step} ({dl}): waiting mean={wm:.2f}, σ={ws:.2f}; "
+                f"service mean={sm:.2f}, σ={ss:.2f}"
             )
 
     if standalone:
         plt.tight_layout()
+    return fig, ax
+
+
+def plot_expedited_baseline_app_to_ready_boxplots(
+    permits_base_by_case: dict,
+    permits_balanced_by_case: dict,
+    *,
+    permit_counts: Sequence[int] = (2000, 6500),
+    staffing_order: Sequence[str] = ("low", "medium", "high"),
+    block_gap: float = 1.12,
+    figsize: tuple = (11.0, 6.2),
+    ax: Optional[Axes] = None,
+    title: str = "Time Savings from Expedited Permit Options",
+    ylabel: str = "Time to ready for construction (months)",
+    baseline_label: str = "Mean permitting time (baseline)",
+    expedited_label: str = "Mean permitting time (expedited permits)",
+    showfliers: bool = False,
+    show_stats_table: bool = False,
+):
+    """
+    Grouped **box plots** comparing baseline vs expedited (balanced) permit mix.
+
+    For each combination of permit volume, staffing level, and scenario, every permit
+    observation of time from **plan application** to **ready for construction** is pooled across **all
+    Monte Carlo runs** (one box per scenario side, using the full run×permit sample).
+
+    Expects dict keys ``"permits={n}|staffing={level}"`` as produced in
+    ``run_simulation_with_segments_cases`` experiment cell.
+    """
+    from matplotlib.transforms import blended_transform_factory
+
+    def _app_to_ready_months(p: Permit) -> Optional[float]:
+        if p.ready_for_construction is None or p.planning_request is None:
+            return None
+        days = float(p.ready_for_construction - p.planning_request)
+        return days / (365.0 / 12.0)
+
+    tick_pos: list[float] = []
+    tick_labs: list[str] = []
+    pos_b: list[float] = []
+    pos_e: list[float] = []
+    data_b: list[list[float]] = []
+    data_e: list[list[float]] = []
+    block_centers: list[float] = []
+
+    x = 0.0
+    box_w = 0.34
+    dw = 0.19
+
+    for n in permit_counts:
+        n0 = len(tick_pos)
+        for staff in staffing_order:
+            key = f"permits={n}|staffing={staff}"
+            bperm = permits_base_by_case.get(key, [])
+            eperm = permits_balanced_by_case.get(key, [])
+            bvals = [v for v in (_app_to_ready_months(p) for p in bperm) if v is not None and np.isfinite(v)]
+            evals = [v for v in (_app_to_ready_months(p) for p in eperm) if v is not None and np.isfinite(v)]
+            if not bvals and not evals:
+                x += 1.0
+                continue
+            tick_pos.append(x)
+            tick_labs.append(staff.capitalize())
+            pos_b.append(x - dw)
+            pos_e.append(x + dw)
+            data_b.append(bvals if bvals else [float("nan")])
+            data_e.append(evals if evals else [float("nan")])
+            x += 1.0
+        if len(tick_pos) > n0:
+            block_centers.append(float(np.mean(tick_pos[n0:])))
+        x += block_gap
+
+    if not data_b:
+        print("No application→ready data for expedited vs baseline box plot.")
+        return None, None
+
+    x_right = x - block_gap + 0.5
+    owns_figure = ax is None
+    if owns_figure:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    bp_b = ax.boxplot(
+        data_b,
+        positions=pos_b,
+        widths=box_w,
+        patch_artist=True,
+        showfliers=showfliers,
+        whis=1.5,
+        medianprops=dict(color="darkred", linewidth=2),
+    )
+    bp_e = ax.boxplot(
+        data_e,
+        positions=pos_e,
+        widths=box_w,
+        patch_artist=True,
+        showfliers=showfliers,
+        whis=1.5,
+        medianprops=dict(color="darkred", linewidth=2),
+    )
+    for patch in bp_b["boxes"]:
+        patch.set_facecolor("#BDBDBD")
+        patch.set_alpha(0.95)
+        patch.set_edgecolor("black")
+    for patch in bp_e["boxes"]:
+        patch.set_facecolor("#7E57C2")
+        patch.set_alpha(0.95)
+        patch.set_edgecolor("black")
+
+    ax.set_xticks(tick_pos)
+    ax.set_xticklabels(tick_labs, rotation=0, fontsize=11)
+    ax.set_xlim(-0.55, x_right)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.grid(axis="y", alpha=0.35, linestyle="-", color="#BDBDBD")
+    ax.set_axisbelow(True)
+
+    flat: list[float] = []
+    for a, b in zip(data_b, data_e):
+        flat.extend([v for v in a if np.isfinite(v)])
+        flat.extend([v for v in b if np.isfinite(v)])
+    ymax = float(np.nanmax(flat)) * 1.12 if flat else 1.0
+    ax.set_ylim(0.0, ymax)
+
+    trans = blended_transform_factory(ax.transData, ax.transAxes)
+    for cx, nperm in zip(block_centers, permit_counts):
+        ax.text(cx, -0.09, f"{nperm:,}", transform=trans, ha="center", va="top", fontsize=12, fontweight="bold")
+
+    ax.legend(
+        handles=[
+            mpatches.Patch(facecolor="#BDBDBD", edgecolor="black", alpha=0.95, label=baseline_label),
+            mpatches.Patch(facecolor="#7E57C2", edgecolor="black", alpha=0.95, label=expedited_label),
+        ],
+        loc="upper right",
+        fontsize=10,
+        framealpha=0.95,
+    )
+
+    if show_stats_table:
+        pairs: List[tuple[str, Sequence[float]]] = []
+        for lab, bb, ee in zip(tick_labs, data_b, data_e):
+            pairs.append((f"{lab} — baseline", bb))
+            pairs.append((f"{lab} — expedited", ee))
+        _show_boxplot_stats_table(
+            pairs,
+            heading=title,
+            enabled=True,
+        )
+
+    if owns_figure:
+        plt.tight_layout(rect=[0, 0.05, 1, 1])
     return fig, ax
 
 
