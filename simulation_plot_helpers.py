@@ -1,10 +1,9 @@
 """
 Helpers for Monte Carlo visualization.
 
-**Monte Carlo permit plots:** you can either pool **all permit-level observations across
-runs** and take one Tukey box (``pooled_tukey_boxplot_stats``), or (for policy levers)
-compute a Tukey box per run and **average** those endpoints across runs
-(``mean_bxp_stats_across_runs`` — see ``policy_lever_impact_analysis``).
+**Monte Carlo permit plots:** pool **all permit-level observations across runs**
+and take one Tukey box (``pooled_tukey_boxplot_stats``), or aggregate box endpoints
+from saved CSV columns (see ``policy_lever_impact_analysis``).
 
 Gantt-style horizontal bars (durations on a timeline) are not statistical summaries and
 should stay as ``barh`` — use these helpers only for outcome distributions across runs.
@@ -12,11 +11,9 @@ should stay as ``barh`` — use these helpers only for outcome distributions acr
 
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Mapping, MutableMapping, Optional, Sequence, TypeVar
+from typing import Any, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 import numpy as np
-
-T = TypeVar("T")
 
 # Lazy import for table output (optional dependency in some environments)
 _pd = None
@@ -140,39 +137,6 @@ def tukey_boxplot_stats_from_values(
     return {"q1": q1, "med": med, "q3": q3, "whislo": whislo, "whishi": whishi}
 
 
-def mean_bxp_stats_across_runs(
-    run_observations: Sequence[Sequence[float]],
-    *,
-    whis: float = 1.5,
-) -> dict[str, float]:
-    """
-    For each inner sequence (one run's observations), compute Tukey box stats, then take
-    the **arithmetic mean** of Q1, median, Q3, and whisker endpoints across runs — matching
-    the policy intervention comparison aggregation.
-
-    Returns keys ``q1``, ``med``, ``q3``, ``whislo``, ``whishi``, and ``n_runs`` (number of
-    runs that contributed a finite box).
-    """
-    per_run: list[dict[str, float]] = []
-    for vals in run_observations:
-        st = tukey_boxplot_stats_from_values(vals, whis=whis)
-        if all(np.isfinite(float(st[k])) for k in ("q1", "med", "q3", "whislo", "whishi")):
-            per_run.append(st)
-    if not per_run:
-        return {
-            "q1": float("nan"),
-            "med": float("nan"),
-            "q3": float("nan"),
-            "whislo": float("nan"),
-            "whishi": float("nan"),
-            "n_runs": 0.0,
-        }
-    keys = ("q1", "med", "q3", "whislo", "whishi")
-    out = {k: float(np.nanmean([s[k] for s in per_run])) for k in keys}
-    out["n_runs"] = float(len(per_run))
-    return out
-
-
 def pooled_tukey_boxplot_stats(
     run_observations: Sequence[Sequence[float]],
     *,
@@ -269,36 +233,6 @@ def permits_by_scenario_partitioned_by_run(
         if isinstance(n, str):
             names.add(n)
     return {n: permits_partitioned_by_run(multi_results, n) for n in sorted(names)}
-
-
-def within_run_median(values: Sequence[float]) -> float:
-    arr = np.asarray(values, dtype=float)
-    arr = arr[np.isfinite(arr)]
-    if arr.size == 0:
-        return float("nan")
-    return float(np.median(arr))
-
-
-def run_medians_for_segment(
-    runs: Sequence[Sequence[Any]],
-    *,
-    segment: Any,
-    value_days_fn,
-) -> List[float]:
-    """For each run, median of ``value_days_fn(permit)`` over permits in ``segment``."""
-    out: List[float] = []
-    for run_ps in runs:
-        vals = []
-        for p in run_ps:
-            if getattr(p, "segment", None) != segment:
-                continue
-            v = value_days_fn(p)
-            if v is not None and np.isfinite(v):
-                vals.append(float(v))
-        m = within_run_median(vals)
-        if np.isfinite(m):
-            out.append(m)
-    return out
 
 
 def values_are_run_lists(permits_by_process: Mapping[str, Any]) -> bool:

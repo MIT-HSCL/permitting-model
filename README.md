@@ -1,142 +1,147 @@
-# Post-Disaster Permitting Process Simulation
+# Post-Disaster Housing Permitting Simulation
 
-A discrete event simulation using SimPy that models the post-disaster permitting process from fire event to construction readiness.
+A [SimPy](https://simpy.readthedocs.io/) discrete-event simulation of the post-disaster permitting workflow—from debris removal and plan preparation through county review to construction readiness. The model supports Monte Carlo experiments, policy lever comparisons, AI-assisted review scenarios, and thesis-style visualizations.
 
-## Overview
+**Repository:** [github.com/mfinn36/permitting-model](https://github.com/mfinn36/permitting-model)
 
-This simulation models the complete workflow of permit processing after a disaster event, including:
+## Quick start
 
-1. **Pre-Planning Phase**:
-   - Debris removal (EPA Phase 1 → USACE Phase 2)
-   - Securing authorization & funding
-   - Plan preparation and submission
+Requires **Python 3.10+**.
 
-2. **Planning Department**:
-   - Processing based on permit segment type
-   - Segments 5 & 6 (self-certification) skip this step
-
-3. **Public Works (Building & Safety)**:
-   - Initial check (segments 3-6 only)
-   - Approval/re-check loop
-   - Parallel reviews by Fire and Public Health departments
-
-## Permit Segments
-
-The simulation models 6 different permit segments:
-
-| Segment | Plan Type | Likeness | Description |
-|---------|-----------|----------|-------------|
-| 1 | Pre-approved plan | Like-for-like | ~80% of permits |
-| 2 | Pre-approved plan | Non-like-for-like | ~20% of permits |
-| 3 | Custom build | Like-for-like | Requires initial check |
-| 4 | Custom build | Non-like-for-like | Requires initial check |
-| 5 | Custom build w/ self-certification | Like-for-like | Skips planning dept |
-| 6 | Custom build w/ self-certification | Non-like-for-like | Skips planning dept |
-
-## Installation
-
-1. Install required dependencies:
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/mfinn36/permitting-model.git
+cd permitting-model
+
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+pip install -e ".[notebooks]"
 ```
 
-## Usage
+Run a small simulation from the command line:
 
-Run the simulation:
 ```bash
-python run_simulation.py
+python run_simulation.py --num-permits 100 --seed 42
 ```
 
-### Simulation Parameters
+Open Jupyter (from the repo root or from `notebooks/`):
 
-You can modify the simulation parameters in `run_simulation.py`:
+```bash
+jupyter lab
+```
 
-- `NUM_PERMITS`: Number of permits to simulate (default: 100)
-- `RANDOM_SEED`: Random seed for reproducibility (default: 42)
+Each notebook’s **first cell** adds the repo root to `sys.path`, so imports work even if you skip the editable install above.
 
-### Customizing the Simulation
+Start with [`notebooks/run_simulation.ipynb`](notebooks/run_simulation.ipynb) for interactive exploration, or [`notebooks/run_simulation_with_segments.ipynb`](notebooks/run_simulation_with_segments.ipynb) for segment-level workflows.
 
-To customize the simulation behavior, edit `permit_simulation.py`:
+## Repository layout
 
-- **Segment distribution**: Modify the `sample_segment()` method
-- **Processing times**: Adjust the distribution parameters in each process method
-- **Resource capacities**: Change the `capacity` parameter when creating resources
-- **Approval rates**: Modify the probability thresholds in `public_works_initial_check()` and `public_works_recheck()`
+| Path | Description |
+|------|-------------|
+| `permit_simulation.py` | Core SimPy model (permit segments, resources, process logic) |
+| `run_simulation.py` | Run single or multiple simulations; CLI entry point |
+| `visualize_permits.py` | Gantt charts, box plots, utilization, and summary figures |
+| `simulation_plot_helpers.py` | Shared statistics helpers for Monte Carlo plots |
+| `policy_intervention_stratum_figures.py` | Policy-comparison figure builder (used by policy notebook) |
+| `plot_median_by_process.py` | CLI: compare standard / sequential / parallel layouts |
+| `repo_paths.py` | `DATA_DIR`, `RESULTS_DIR`, and other standard paths |
+| `data/` | Empirical inputs (cross-case timelines, pre-application duration CSVs) |
+| `data/pre_application/` | Disaster-to-application timing data and `fit_data.ipynb` |
+| `notebooks/` | Analysis and thesis figure notebooks |
+| `results/` | Generated CSVs and PNGs (created at runtime; not committed) |
 
-## Process Flow
+## Permit segments
 
-### Initial Phase (Parallel Paths)
+The model uses six permit segments (plan type × likeness × self-certification):
 
-**Path 1: Debris Removal**
-- EPA Debris Removal (Phase 1): Uniform distribution (2-3 days)
-- USACE Debris Removal (Phase 2): Uniform distribution (2-3 days)
+| Segment | Plan type | Likeness | Notes |
+|---------|-----------|----------|-------|
+| 1 | Pre-approved | Like-for-like | |
+| 2 | Pre-approved | Non-like-for-like | |
+| 3 | Custom | Like-for-like | Initial public works check |
+| 4 | Custom | Non-like-for-like | Initial public works check |
+| 5 | Custom + self-cert | Like-for-like | Skips planning department |
+| 6 | Custom + self-cert | Non-like-for-like | Skips planning department |
 
-**Path 2: Authorization & Plans**
-- Securing authorization: Normal distribution N(42, 20) days
-- Prepare & submit plans:
-  - Segments 1-2: Normal distribution N(10, 2) days
-  - Segments 3-6: Lognormal distribution (median 150 days, σ=0.6)
+Mix presets (`permit_mix`): `la` (Los Angeles–style default), `balanced`, or `all_custom_non_like_for_like`.
 
-### Planning Department
+## Notebooks
 
-- **Segments 1 & 3** (like-for-like): Normal distribution N(3, 1) days
-- **Segments 2 & 4** (non-like-for-like): Normal distribution N(33, 10) days
-- **Segments 5 & 6** (self-certification): **SKIPPED**
+Run from the repo root. Outputs are written under `results/` unless noted.
 
-### Public Works (Building & Safety)
+| Notebook | Purpose |
+|----------|---------|
+| `run_simulation.ipynb` | Main interactive runs, utilization, and visualizations |
+| `run_simulation_with_segments.ipynb` | Core segment workflow (default vs balanced mix) |
+| `run_simulation_with_segments_cases.ipynb` | Six-case staffing × permit volume grid (`lognormal_180`) |
+| `run_simulation_with_ai.ipynb` | AI review modes (`initial_check`, `full_review`) |
+| `run_simulation_parallel.ipynb` | Standard / sequential / parallel process layouts across scenarios |
+| `policy_lever_impact_analysis.ipynb` | Policy lever Monte Carlo and comparison figures |
+| `sensitivity_analysis.ipynb` | Parameter sensitivity sweeps |
+| `convergence_plot.ipynb` | Monte Carlo convergence checks |
+| `timeline_data.ipynb` | Cross-case recovery timeline plots |
+| `pre_application_distribution_curves.ipynb` | Pre-application duration distributions |
+| `preapp_distribution_volume_comparison.ipynb` | Pre-app distribution vs permit volume |
+| `data/pre_application/fit_data.ipynb` | Fit pre-application timing to empirical CSVs |
 
-- **Initial Check** (segments 3-6 only):
-  - Processing time: Normal distribution N(11.6, 2) days
-  - Approval rate: 75% approved, 25% require re-check
-  
-- **Re-check Loop** (if not approved):
-  - Processing time: Normal distribution N(8.3, 2) days
-  - Approval rate: 75% approved, 25% require another re-check
+Heavy notebooks may take minutes to hours depending on `NUM_PERMITS` and `N_RUNS`. Clear saved outputs with:
 
-### Parallel Reviews (After Approval)
+```bash
+pip install nbstripout
+nbstripout notebooks/*.ipynb data/pre_application/fit_data.ipynb
+```
 
-- **Fire Department Review**:
-  - All permits (100%)
-  - Processing time:
-    - 70%: Quick review ~1 day (Normal distribution N(1, 0.2) days)
-    - 30%: Detailed review ~13 days (Normal distribution N(13, 2) days)
+## Python API
 
-- **Public Health Review**:
-  - 1.3% of permits
-  - Processing time: Normal distribution N(10, 2) days
+```python
+from run_simulation import run_simulation, run_multiple_simulations, print_statistics
 
-## Output
+sim = run_simulation(
+    num_permits=500,
+    random_seed=42,
+    sequential="standard",       # "standard" | "parallel" | "sequential"
+    ai_review="none",            # "none" | "initial_check" | "full_review"
+    permit_mix="la",
+    pre_application_distribution="baseline",  # baseline, lognormal_180, lognormal_60, poisson_10
+)
+print_statistics(sim.get_statistics())
+```
 
-The simulation provides:
+```python
+from visualize_permits import visualize_all
 
-1. **Console Statistics**:
-   - Total completed and in-progress permits
-   - Segment distribution
-   - Overall processing time statistics (mean, median, std dev, min, max)
-   - Processing time by segment
-   - Public Works re-check statistics
+visualize_all(sim.completed_permits, save_prefix="results/my_run")
+```
 
-2. **Optional JSON Export**:
-   - Detailed permit-level data
-   - Timestamps for each process stage
-   - Complete statistics
+## Command-line utilities
 
-## Resource Capacities
+```bash
+# Median time by segment for three process layouts
+python plot_median_by_process.py --num-permits 500 --output results/median_by_process.png
 
-- EPA Debris Removal: 140 servers (1400 people in 5-person crews)
-- USACE Debris Removal: 140 servers (1400 people in 5-person crews)
-- Planning Department: 125 capacity (25 servers × 5 permits caseload each)
-- Public Works: 25 servers
-- Fire Department: 25 servers
-- Public Health: 25 servers
+# Example visualizations after a short run
+python visualize_permits.py
+```
 
-## Notes
+## Model overview
 
-- All time distributions and simulation times are in days
-- The simulation uses SimPy's discrete event simulation engine
-- Random seed can be set for reproducible results
-- The model assumes permits all enter immediately at simulation start (no delay)
+**Pre-application (parallel paths):** EPA/USACE debris removal; authorization and plan preparation (timing depends on segment and `pre_application_distribution`).
+
+**County review:** Planning department (skipped for self-cert segments 5–6); public works initial check and re-check loop (segments 3–6); parallel fire and occasional public health review.
+
+**Staffing:** Planning, public works, and fire use caseload-limited staff pools (`StaffCaseloadPool`).
+
+All durations are in **days**. See docstrings in `permit_simulation.py` for distribution parameters and resource capacities.
+
+## Data
+
+- `data/cross_case_recovery_timelines.csv` — cross-jurisdiction recovery milestones for `timeline_data.ipynb`
+- `data/pre_application/*.csv` — empirical disaster-to-application durations (LA, Louisville/Marshall, Paradise, Santa Rosa, Sonoma)
+
+## Citation
+
+If you use this code in research, please cite your copy of the repository and the associated thesis. A formal citation block can be added once the thesis is published.
 
 ## License
 
-This simulation is created for academic research purposes.
+[MIT License](LICENSE) — Copyright (c) 2026 Megan Finn

@@ -44,24 +44,6 @@ def _show_aggregate_bxp_stats_table(
     show_aggregate_bxp_stats_table(rows, heading=heading)
 
 
-DEFAULT_GANTT_COLORS = {
-    "EPA Debris (waiting)": "#B3E5FC",      # Light blue (waiting state)
-    "EPA Debris (service)": "#0288D1",      # Darker blue (active state)
-    "USACE Debris (waiting)": "#B3E5FC",
-    "USACE Debris (service)": "#0288D1",
-    "Planning (waiting)": "#FFE0B2",        # Light orange (waiting state)
-    "Planning (service)": "#FF8F00",        # Darker orange (active state)
-    "Agency Referral (waiting)": "#E1BEE7", # Light purple (waiting state)
-    "Agency Referral (service)": "#7B1FA2", # Darker purple (active state)
-    "Special Zoning": "#FFF59D",            # Light yellow
-    "Public Works (waiting)": "#F0F4C3",    # Light purple-gray (waiting state)
-    "Public Works (service)": "#9575CD",    # Medium purple (active state)
-    "Fire Review (waiting)": "#FFCCBC",     # Light red/pink (waiting state)
-    "Fire Review (service)": "#D84315",     # Darker red (active state)
-    "Pre-Application Activities": "#C8E6C9", # Light green
-    "Applicant Revisions": "#81C784",       # Medium green
-}
-
 GANTT_COLORS_OPTION_1 = {
     "EPA Debris (waiting)": "#CFE4FF", #light blue
     "EPA Debris (service)": "#6DB1FF", #dark blue
@@ -104,105 +86,6 @@ GANTT_COLOR_OPTIONS = {
 }
 
 
-def calculate_stage_times(permit: Permit) -> dict:
-    """
-    Calculate time spent in each stage for a permit.
-    Returns a dictionary with stage names and durations in days.
-    """
-    stages = {}
-    
-    # Debris removal - EPA (separate waiting and service)
-    if (
-        permit.epa_debris_request is not None
-        and permit.epa_debris_service_start is not None
-        and permit.epa_debris_end is not None
-    ):
-        stages["EPA Debris (Waiting)"] = permit.epa_debris_service_start - permit.epa_debris_request
-        stages["EPA Debris (Service)"] = permit.epa_debris_end - permit.epa_debris_service_start
-
-    # Debris removal - USACE (separate waiting and service)
-    if (
-        permit.usace_debris_request is not None
-        and permit.usace_debris_service_start is not None
-        and permit.usace_debris_end is not None
-    ):
-        stages["USACE Debris (Waiting)"] = permit.usace_debris_service_start - permit.usace_debris_request
-        stages["USACE Debris (Service)"] = permit.usace_debris_end - permit.usace_debris_service_start
-
-    
-    # Pre-application activities (authorization + plan preparation, service only)
-    pre_app = 0.0
-    if permit.authorization_start is not None and permit.authorization_end is not None:
-        pre_app += permit.authorization_end - permit.authorization_start
-    if permit.plan_prep_start is not None and permit.plan_prep_end is not None:
-        pre_app += permit.plan_prep_end - permit.plan_prep_start
-    if pre_app > 0:
-        stages["Pre-application activities"] = pre_app
-
-    # Applicant revisions (aggregated service time done by applicant)
-    if getattr(permit, "applicant_revisions_total_time", 0.0) > 0:
-        stages["Applicant Revisions"] = permit.applicant_revisions_total_time
-    
-    # Planning department - four buckets (initial waiting/service, recheck waiting/service)
-    if (
-        permit.planning_initial_waiting > 0
-        or permit.planning_initial_service > 0
-        or permit.planning_recheck_waiting > 0
-        or permit.planning_recheck_service > 0
-    ):
-        stages["Planning Initial (Waiting)"] = permit.planning_initial_waiting
-        stages["Planning Initial (Service)"] = permit.planning_initial_service
-        stages["Planning Recheck (Waiting)"] = permit.planning_recheck_waiting
-        stages["Planning Recheck (Service)"] = permit.planning_recheck_service
-        stages["Planning Total Waiting"] = permit.planning_initial_waiting + permit.planning_recheck_waiting
-        stages["Planning Total Service"] = permit.planning_initial_service + permit.planning_recheck_service
-    
-    # Public Works - separate waiting and service
-    if (
-        permit.public_works_initial_waiting > 0
-        or permit.public_works_initial_service > 0
-        or permit.public_works_recheck_waiting > 0
-        or permit.public_works_recheck_service > 0
-    ):
-        stages["Public Works Initial (Waiting)"] = permit.public_works_initial_waiting
-        stages["Public Works Initial (Service)"] = permit.public_works_initial_service
-        stages["Public Works Recheck (Waiting)"] = permit.public_works_recheck_waiting
-        stages["Public Works Recheck (Service)"] = permit.public_works_recheck_service
-        stages["Public Works Total Waiting"] = permit.public_works_initial_waiting + permit.public_works_recheck_waiting
-        stages["Public Works Total Service"] = permit.public_works_initial_service + permit.public_works_recheck_service
-    
-    # Fire review - four buckets (initial waiting/service, recheck waiting/service)
-    if (
-        permit.fire_initial_waiting > 0
-        or permit.fire_initial_service > 0
-        or permit.fire_recheck_waiting > 0
-        or permit.fire_recheck_service > 0
-    ):
-        stages["Fire Review Initial (Waiting)"] = permit.fire_initial_waiting
-        stages["Fire Review Initial (Service)"] = permit.fire_initial_service
-        stages["Fire Review Recheck (Waiting)"] = permit.fire_recheck_waiting
-        stages["Fire Review Recheck (Service)"] = permit.fire_recheck_service
-        stages["Fire Review Total Waiting"] = permit.fire_initial_waiting + permit.fire_recheck_waiting
-        stages["Fire Review Total Service"] = permit.fire_initial_service + permit.fire_recheck_service
-    
-    # Agency referral — separate waiting and service
-    if (permit.agency_referral_request is not None and
-        permit.agency_referral_service_start is not None and
-        permit.agency_referral_end is not None):
-        stages['Agency Referral (Waiting)'] = permit.agency_referral_service_start - permit.agency_referral_request
-        stages['Agency Referral (Service)'] = permit.agency_referral_end - permit.agency_referral_service_start
-    
-    # Waiting time (gaps between stages)
-    total_processing_time = permit.ready_for_construction - permit.created_at if permit.ready_for_construction else None
-    if total_processing_time:
-        accounted_time = sum(stages.values())
-        waiting_time = total_processing_time - accounted_time
-        if waiting_time > 0:
-            stages['Other Waiting'] = waiting_time
-    
-    return stages
-
-
 def calculate_step_waiting_service_totals(permit: Permit) -> dict:
     """
     Calculate total waiting and service times for each major process step,
@@ -227,12 +110,10 @@ def calculate_step_waiting_service_totals(permit: Permit) -> dict:
     if usace_waiting > 0 or usace_service > 0:
         steps["USACE Debris"] = {"waiting": usace_waiting, "service": usace_service}
 
-    # Pre-application activities: authorization + plan preparation (single step)
+    # Pre-application activities: plan preparation (single step)
     pre_app_service = 0.0
-    if permit.authorization_start is not None and permit.authorization_end is not None:
-        pre_app_service += permit.authorization_end - permit.authorization_start
     if permit.plan_prep_start is not None and permit.plan_prep_end is not None:
-        pre_app_service += permit.plan_prep_end - permit.plan_prep_start
+        pre_app_service = permit.plan_prep_end - permit.plan_prep_start
     if pre_app_service > 0:
         steps["Pre-Application Activities"] = {"waiting": 0.0, "service": pre_app_service}
 
@@ -351,21 +232,15 @@ def _gantt_intervals_from_permit(
 
     review_stages = {"Planning", "Agency Referral", "Public Works", "Fire Review"}
 
-    # Pre-application activities: one bar from start of authorization through plan submission
-    pa_start = getattr(permit, "authorization_start", None)
-    pa_end = getattr(permit, "plan_prep_end", None)
-    if pa_start is not None and pa_end is not None and pa_end > pa_start:
-        intervals.append((
-            pa_start,
-            pa_end,
-            "Pre-Application Activities",
-            stage_color("Pre-Application Activities", "#659DB2"),
-            False,
-        ))
-    elif getattr(permit, "plan_prep_start", None) is not None and pa_end is not None and pa_end > permit.plan_prep_start:
+    # Pre-application activities: plan preparation
+    if (
+        getattr(permit, "plan_prep_start", None) is not None
+        and getattr(permit, "plan_prep_end", None) is not None
+        and permit.plan_prep_end > permit.plan_prep_start
+    ):
         intervals.append((
             permit.plan_prep_start,
-            pa_end,
+            permit.plan_prep_end,
             "Pre-Application Activities",
             stage_color("Pre-Application Activities", "#659DB2"),
             False,
@@ -796,28 +671,16 @@ def plot_gantt_one_random_permit_segment(
 def plot_total_time_by_segment(
     permits: List[Permit],
     figsize=(10, 6),
-    show_boxplot=True,
     *,
     show_stats_table: bool = True,
 ):
     """
     Box plot of time from disaster to construction start for each segment (years).
 
-    ``show_boxplot=False`` is deprecated and treated as True (bar charts removed).
-
     When ``show_stats_table`` is True (default), prints or displays a small table
     (``n``, mean, std, min, quartiles, max) for each box series after the figure.
     """
-    from warnings import warn
-
     from permit_simulation import Segment
-
-    if not show_boxplot:
-        warn(
-            "plot_total_time_by_segment(..., show_boxplot=False) is ignored; bar charts were removed.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
     segment_times = {segment: [] for segment in Segment}
     for permit in permits:
@@ -1641,116 +1504,6 @@ def plot_expedited_baseline_app_to_ready_boxplots(
 
     if owns_figure:
         plt.tight_layout(rect=[0, 0.05, 1, 1])
-    return fig, ax
-
-
-def plot_permits_by_stage_over_time(
-    permits: List[Permit],
-    stages: Optional[List[str]] = None,
-    include_waiting: bool = True,
-    include_service: bool = True,
-    num_points: int = 200,
-    figsize=(12, 6),
-):
-    """
-    Plot the total number of permits active in each stage over time.
-
-    This uses the same stage definitions as the Gantt chart helper
-    (_gantt_intervals_from_permit), and counts a permit as \"in a stage\"
-    whenever it is either waiting or in service for that stage (configurable).
-
-    Args:
-        permits: List of Permit objects.
-        stages: Optional list of stage labels to include. If None, uses all
-                stages seen in the intervals (e.g. 'Planning', 'Public Works').
-                Note: waiting/service variants like 'Planning (waiting)' and
-                'Planning (service)' are collapsed to 'Planning'.
-        include_waiting: If True, count waiting intervals for each stage.
-        include_service: If True, count service intervals for each stage.
-        num_points: Number of time samples between earliest start and latest
-                    end to estimate counts.
-        figsize: Matplotlib figure size.
-    """
-    if not permits:
-        print("No permits provided for stage-over-time chart.")
-        return None, None
-
-    # Collect FIRST time each permit reaches each stage (for cumulative curves)
-    stage_first_times: dict[str, list[float]] = {}
-    t_min = None
-    t_max = None
-
-    for permit in permits:
-        per_permit_first: dict[str, float] = {}
-        for start, end, label, _color, is_waiting in _gantt_intervals_from_permit(permit):
-            # Collapse 'Planning (waiting)' / 'Planning (service)' -> 'Planning'
-            base_label = label.split(" (")[0]
-            if is_waiting and not include_waiting:
-                continue
-            if (not is_waiting) and not include_service:
-                continue
-            if start is None or end is None or end <= start:
-                continue
-
-            prev = per_permit_first.get(base_label)
-            if prev is None or start < prev:
-                per_permit_first[base_label] = start
-
-        for stage_name, first_time in per_permit_first.items():
-            stage_first_times.setdefault(stage_name, []).append(first_time)
-            t_min = first_time if t_min is None else min(t_min, first_time)
-            t_max = first_time if t_max is None else max(t_max, first_time)
-
-    if t_min is None:
-        print("No stage timing data found for stage-over-time chart.")
-        return None, None
-
-    # Choose which stages to plot
-    all_stage_names = sorted(stage_first_times.keys())
-    if stages is None:
-        stages_to_plot = all_stage_names
-    else:
-        stages_to_plot = [s for s in stages if s in stage_first_times]
-        if not stages_to_plot:
-            print("None of the requested stages were found in the data.")
-            return None, None
-
-    # Sample times and count permits that have REACHED each stage (cumulative)
-    times = np.linspace(t_min, t_max, num_points)
-    counts = {stage: np.zeros_like(times, dtype=float) for stage in stages_to_plot}
-
-    for stage in stages_to_plot:
-        first_times = np.sort(np.array(stage_first_times.get(stage, []), dtype=float))
-        if first_times.size == 0:
-            continue
-        arr = counts[stage]
-        idx = 0
-        running = 0.0
-        for i, t in enumerate(times):
-            while idx < first_times.size and first_times[idx] <= t:
-                running += 1.0
-                idx += 1
-            arr[i] = running
-
-    # Convert to share of permits (0–100%) for cumulative recovery-style curves
-    total_permits = max(len(permits), 1)
-    fig, ax = plt.subplots(figsize=figsize)
-
-    # Convert simulation time (days) to rough months for readability
-    time_months = times / 30.0
-
-    for stage in stages_to_plot:
-        share_pct = counts[stage] / total_permits * 100.0
-        ax.plot(time_months, share_pct, linewidth=2, label=stage)
-
-    ax.set_xlabel("Months postdisaster (simulation time)", fontsize=12)
-    ax.set_ylabel("Share of permits in stage (%)", fontsize=12)
-    ax.set_title("Share of permits by stage over time", fontsize=14, fontweight="bold")
-    ax.set_ylim(0, 100)
-    ax.legend(loc="lower right")
-    ax.grid(axis="both", alpha=0.3)
-
-    plt.tight_layout()
     return fig, ax
 
 

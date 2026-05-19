@@ -134,11 +134,8 @@ class Permit:
     segment: Segment
     created_at: float
     # Timestamps for tracking (request time, service start, service end)
-    # Debris removal
-    debris_removal_request: Optional[float] = None
-    debris_removal_service_start: Optional[float] = None
+    # Debris removal (EPA / USACE tracked separately)
     debris_removal_end: Optional[float] = None
-    # Debris removal (separate EPA vs USACE)
     epa_debris_request: Optional[float] = None
     epa_debris_service_start: Optional[float] = None
     epa_debris_end: Optional[float] = None
@@ -147,9 +144,6 @@ class Permit:
     usace_debris_service_start: Optional[float] = None
     usace_debris_end: Optional[float] = None
     usace_debris_total_waiting: float = 0.0
-    # Authorization (no waiting, just service time)
-    authorization_start: Optional[float] = None
-    authorization_end: Optional[float] = None
     # Plan preparation (no waiting, just service time)
     plan_prep_start: Optional[float] = None
     plan_prep_end: Optional[float] = None
@@ -244,10 +238,8 @@ def _permit_county_review_days(p: Permit) -> float:
 
 
 def _permit_applicant_days(p: Permit) -> float:
-    """Cumulative days in pre-application (authorization + plan prep) and applicant revision work."""
+    """Cumulative days in pre-application (plan prep) and applicant revision work."""
     t = p.applicant_revisions_total_time
-    if p.authorization_end is not None and p.authorization_start is not None:
-        t += p.authorization_end - p.authorization_start
     if p.plan_prep_end is not None and p.plan_prep_start is not None:
         t += p.plan_prep_end - p.plan_prep_start
     return t
@@ -318,7 +310,6 @@ class PermitSimulation:
         pct_custom: Optional[float] = None,
         pct_self_cert: Optional[float] = None,
         pct_like_for_like: Optional[float] = None,
-        review_duration_families: Optional[Dict[str, str]] = None,
         review_duration_multipliers: Optional[Dict[str, float]] = None,
         pre_application_distribution: str = "baseline",
         planning_staff_count: int = 20,
@@ -344,9 +335,6 @@ class PermitSimulation:
             pct_custom: Optional manual override for custom plan share.
             pct_self_cert: Optional manual override for self-cert plan share.
             pct_like_for_like: Optional manual override for like-for-like share.
-            review_duration_families: Optional per-stage distribution family mapping for
-                'planning', 'public_works', and 'fire'. Supported families:
-                'normal', 'lognormal', 'triangular', 'uniform'.
             review_duration_multipliers: Optional per-stage duration multipliers.
                 Supported keys include 'planning', 'public_works', 'fire',
                 'special_zoning', and 'agency_referral'.
@@ -371,7 +359,6 @@ class PermitSimulation:
               like-for-like vs non-like-for-like across all plan types.
         """
         self.env = env
-        self.random_seed = random_seed
         self.ai_review = ai_review
         random.seed(random_seed)
         np.random.seed(random_seed)
@@ -379,7 +366,6 @@ class PermitSimulation:
         if permit_mix not in self.PERMIT_MIX_PRESETS:
             supported = ", ".join(sorted(self.PERMIT_MIX_PRESETS.keys()))
             raise ValueError(f"Invalid permit_mix '{permit_mix}'. Supported values: {supported}")
-        self.permit_mix = permit_mix
         preset_mix = self.PERMIT_MIX_PRESETS[permit_mix]
 
         # Store segment mix parameters (manual overrides still supported).
@@ -388,14 +374,6 @@ class PermitSimulation:
         self.pct_self_cert = preset_mix["pct_self_cert"] if pct_self_cert is None else pct_self_cert
         self.pct_like_for_like = preset_mix["pct_like_for_like"] if pct_like_for_like is None else pct_like_for_like
 
-        default_review_families = {
-            "planning": "normal",
-            "public_works": "normal",
-            "fire": "normal",
-        }
-        self.review_duration_families = dict(default_review_families)
-        if review_duration_families:
-            self.review_duration_families.update(review_duration_families)
         self.review_duration_multipliers = {
             "planning": 1.0,
             "public_works": 1.0,
@@ -497,55 +475,11 @@ class PermitSimulation:
             return 0.0
         return float(np.random.gamma(shape=shape, scale=scale))
 
-    def _gamma_shape_scale_from_mean_std(self, mean: float, std: float) -> tuple[float, float]:
-        """Convert mean/std to gamma shape/scale."""
-        mean = max(float(mean), 0.0)
-        std = max(float(std), 0.0)
-        if mean == 0.0 or std == 0.0:
-            return 0.0, 0.0
-        shape = (mean / std) ** 2
-        scale = (std ** 2) / mean
-        return shape, scale
-    
     def sample_lognormal(self, median: float, sigma: float) -> float:
         """Sample from lognormal distribution with given median and sigma."""
         # Convert median to mu for lognormal
         mu = np.log(median)
         return max(0, np.random.lognormal(mu, sigma))
-
-    def _lognormal_from_mean_std(self, mean: float, std: float) -> tuple[float, float]:
-        """Convert real-space mean/std to numpy.lognormal(mu, sigma)."""
-        mean = max(mean, 1e-6)
-        std = max(std, 1e-6)
-        sigma2 = np.log(1.0 + (std ** 2) / (mean ** 2))
-        sigma = np.sqrt(sigma2)
-        mu = np.log(mean) - 0.5 * sigma2
-        return mu, sigma
-
-    def sample_duration_family(self, family: str, mean: float, std: float) -> float:
-        """Sample non-negative duration from a named family using mean/std scale."""
-        mean = max(mean, 1e-6)
-        std = max(std, 1e-6)
-        family = family.lower()
-
-        if family == "normal":
-            value = np.random.normal(mean, std)
-        elif family == "lognormal":
-            mu, sigma = self._lognormal_from_mean_std(mean, std)
-            value = np.random.lognormal(mu, sigma)
-        elif family == "triangular":
-            left = max(0.0, mean - 2.0 * std)
-            mode = mean
-            right = mean + 2.0 * std
-            value = np.random.triangular(left, mode, right)
-        elif family == "uniform":
-            low = max(0.0, mean - std)
-            high = mean + std
-            value = np.random.uniform(low, high)
-        else:
-            raise ValueError(f"Unsupported duration family: {family}")
-
-        return max(0.0, float(value))
 
     def sample_pre_application_duration(self, permit: Permit) -> float:
         """Sample pre-application duration using configured distribution choice."""
@@ -567,19 +501,13 @@ class PermitSimulation:
         if permit.segment in [Segment.PRE_APPROVED_LIKE, Segment.PRE_APPROVED_NON_LIKE]:
             return 0.5 * float(base_duration)
         return float(base_duration)
-    
-    def sample_uniform_days(self) -> float:
-        """Sample uniform: 2 or 3 days, each with 50% probability."""
-        return random.choice([2, 3])
-    
+
     def epa_debris_removal(self, permit: Permit):
         """EPA Debris Removal (Phase 1)."""
-        permit.debris_removal_request = self.env.now
         permit.epa_debris_request = self.env.now
         request_time = self.env.now
         with self.epa_debris_servers.request() as request:
             yield request
-            permit.debris_removal_service_start = self.env.now
             permit.epa_debris_service_start = self.env.now
             permit.epa_debris_total_waiting += (permit.epa_debris_service_start - request_time)
             duration = self.sample_gamma(1.5, 1)
@@ -661,7 +589,6 @@ class PermitSimulation:
                     duration_days = duration_days * 0.1
             else:
                 # Recheck uses shorter time
-                planning_multiplier = self.review_duration_multipliers.get("planning", 1.0)
                 duration_days = self.sample_gamma(4, 0.25)
                 if self.ai_review == "full_review":
                     duration_days = duration_days * 0.1
@@ -681,7 +608,6 @@ class PermitSimulation:
         if permit.planning_rechecks == 0:
             # 10% approved, 90% need re-check
             approved = random.random() < 0.1
-            is_initial = False
         else:
             # 90% approved, 10% need re-check if has already been rechecked
             approved = random.random() < 0.9
@@ -798,7 +724,6 @@ class PermitSimulation:
         if permit.public_works_rechecks == 0:
             # 10% approved, 90% need re-check
             approved = random.random() < 0.1
-            is_initial = False
         else:
             # 90% approved, 10% need re-check if has already been rechecked
             approved = random.random() < 0.9
@@ -930,7 +855,6 @@ class PermitSimulation:
         if permit.fire_rechecks == 0:
             # 54% approved, 60% need re-check
             approved = random.random() < 0.4
-            is_initial = False
         else:
             # 95% approved, 5% need re-check if has already been rechecked
             approved = random.random() < 0.95
@@ -1220,8 +1144,6 @@ class PermitSimulation:
                 service += p.epa_debris_end - p.epa_debris_service_start
             if p.usace_debris_end is not None and p.usace_debris_service_start is not None:
                 service += p.usace_debris_end - p.usace_debris_service_start
-            if p.authorization_end is not None and p.authorization_start is not None:
-                service += p.authorization_end - p.authorization_start
             if p.plan_prep_end is not None and p.plan_prep_start is not None:
                 service += p.plan_prep_end - p.plan_prep_start
             service += p.planning_initial_service + p.planning_recheck_service

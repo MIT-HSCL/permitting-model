@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 import matplotlib.pyplot as plt
+
+from repo_paths import RESULTS_DIR
 import numpy as np
 import pandas as pd
 from matplotlib.patches import Patch
@@ -166,7 +168,7 @@ def _draw_strata_grouped_bxp(
 
 def save_three_stratum_figures(
     df_run: pd.DataFrame,
-    results_dir: Path | str = "results",
+    results_dir: Path | str = RESULTS_DIR,
     *,
     pre_apps: Sequence[str] | None = None,
 ) -> list[Path]:

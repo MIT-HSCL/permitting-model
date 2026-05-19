@@ -4,8 +4,6 @@ Main script to run the permit simulation and display results.
 
 import simpy
 from permit_simulation import PermitSimulation
-import json
-from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
@@ -36,7 +34,6 @@ def run_simulation(
     pct_custom: float | None = None,
     pct_self_cert: float | None = None,
     pct_like_for_like: float | None = None,
-    review_duration_families: dict[str, str] | None = None,
     review_duration_multipliers: dict[str, float] | None = None,
     pre_application_distribution: str = "baseline",
     planning_staff_count: int = 25,
@@ -60,8 +57,6 @@ def run_simulation(
         pct_custom: Optional manual override for custom plan share (0–1).
         pct_self_cert: Optional manual override for self-certification share (0–1).
         pct_like_for_like: Optional manual override for like-for-like share (0–1).
-        review_duration_families: Optional map for review stages (planning/public_works/fire)
-            to sampling family (normal/lognormal/triangular/uniform).
         review_duration_multipliers: Optional map of duration multipliers by stage.
             Keys can include planning/public_works/fire/special_zoning/agency_referral.
         pre_application_distribution: Distribution choice for pre-application duration.
@@ -84,7 +79,6 @@ def run_simulation(
         pct_custom=pct_custom,
         pct_self_cert=pct_self_cert,
         pct_like_for_like=pct_like_for_like,
-        review_duration_families=review_duration_families,
         review_duration_multipliers=review_duration_multipliers,
         pre_application_distribution=pre_application_distribution,
         planning_staff_count=planning_staff_count,
@@ -403,28 +397,6 @@ def plot_staff_utilization_series(
     return target_ax
 
 
-def plot_staff_utilization(
-    sim: PermitSimulation,
-    days: float,
-    step: float = 1.0,
-    as_percent: bool = True,
-    xlim: Optional[tuple[float, float]] = None,
-    ylim: Optional[tuple[float, float]] = None,
-    *,
-    utilization_kind: Literal["actual", "implied"] = "actual",
-) -> None:
-    """Plot planning, fire, and public works utilization for a single completed simulation."""
-    u = sim.get_staff_utilization_over_time(days=days, step=step, utilization_kind=utilization_kind)
-    plot_staff_utilization_series(
-        u,
-        as_percent=as_percent,
-        title="Staff utilization over time",
-        xlim=xlim,
-        ylim=ylim,
-        utilization_kind=utilization_kind,
-    )
-
-
 def print_statistics(stats: dict):
     """Print simulation statistics in a readable format."""
     print("\n" + "="*80)
@@ -526,6 +498,54 @@ def print_statistics(stats: dict):
             print(f"  → Applicant revision time is {pct:.1f}% of mean total processing time (disaster to construction).")
     
     print("\n" + "="*80)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Run the post-disaster permitting discrete-event simulation."
+    )
+    parser.add_argument(
+        "--num-permits",
+        type=int,
+        default=100,
+        help="Number of permits to simulate (default: 100)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed (default: 42)",
+    )
+    parser.add_argument(
+        "--sequential",
+        choices=("standard", "parallel", "sequential"),
+        default="standard",
+        help="Process layout: standard, parallel, or sequential (default: standard)",
+    )
+    parser.add_argument(
+        "--ai-review",
+        choices=("none", "initial_check", "full_review"),
+        default="none",
+        help="AI review mode: none, initial_check, or full_review (default: none)",
+    )
+    parser.add_argument(
+        "--permit-mix",
+        choices=("la", "balanced", "all_custom_non_like_for_like"),
+        default="la",
+        help="Permit segment mix preset (default: la)",
+    )
+    args = parser.parse_args()
+
+    sim = run_simulation(
+        num_permits=args.num_permits,
+        random_seed=args.seed,
+        sequential=args.sequential,
+        ai_review=args.ai_review,
+        permit_mix=args.permit_mix,
+    )
+    print_statistics(sim.get_statistics())
 
 
 

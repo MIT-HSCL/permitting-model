@@ -4,11 +4,19 @@ then plot median total time from disaster to construction start by segment
 for each process.
 """
 
+from repo_paths import RESULTS_DIR, ensure_results_dir
 from run_simulation import run_simulation
 from visualize_permits import plot_median_total_time_by_process
 
 
-def main(num_permits: int = 2000, random_seed: int = 42, save_path: str = "median_total_time_by_process.png"):
+def main(
+    num_permits: int = 2000,
+    random_seed: int = 42,
+    save_path: str | None = None,
+):
+    if save_path is None:
+        ensure_results_dir()
+        save_path = str(RESULTS_DIR / "median_total_time_by_process.png")
     print("Running Standard process...")
     sim_standard = run_simulation(
         num_permits=num_permits,
@@ -45,6 +53,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot median total time by segment for Standard, Sequential, Parallel.")
     parser.add_argument("--num-permits", type=int, default=2000, help="Number of permits per run (default 2000)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default 42)")
-    parser.add_argument("--output", "-o", default="median_total_time_by_process.png", help="Output image path")
+    parser.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        help="Output image path (default: results/median_total_time_by_process.png)",
+    )
     args = parser.parse_args()
     main(num_permits=args.num_permits, random_seed=args.seed, save_path=args.output)
