@@ -149,4 +149,4 @@ If you use this code in research, please cite your copy of the repository and th
 
 ## License
 
-[MIT License](LICENSE) — Copyright (c) 2026 Megan Finn
+[MIT License](LICENSE) — Copyright (c) 2026 Megan Finnigan
