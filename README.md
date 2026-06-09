@@ -67,7 +67,9 @@ Mix presets (`permit_mix`): `la` (Los Angeles–style default), `balanced`, or `
 
 ## Notebooks
 
-Run from the repo root. Outputs are written under `results/` unless noted.
+Run from the repo root or from `notebooks/`. Each notebook starts with a **path setup cell**, then markdown sections that explain what to run and in what order. Outputs go under `results/` unless noted.
+
+**Tip:** Lower `N_RUNS` and `NUM_PERMITS` while testing — full thesis settings can take hours.
 
 | Notebook | Purpose |
 |----------|---------|
@@ -83,6 +85,9 @@ Run from the repo root. Outputs are written under `results/` unless noted.
 | `pre_application_distribution_curves.ipynb` | Pre-application duration distributions |
 | `preapp_distribution_volume_comparison.ipynb` | Pre-app distribution vs permit volume |
 | `data/pre_application/fit_data.ipynb` | Fit pre-application timing to empirical CSVs |
+| `usace_staffing.ipynb` | Plot USACE crew capacity schedule (no simulation) |
+
+To re-apply walkthrough markdown after editing notebooks: `python scripts/refresh_notebook_docs.py`
 
 Heavy notebooks may take minutes to hours depending on `NUM_PERMITS` and `N_RUNS`. Clear saved outputs with:
 
