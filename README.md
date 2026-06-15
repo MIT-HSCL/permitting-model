@@ -1,6 +1,6 @@
 # Post-Disaster Housing Permitting Simulation
 
-A [SimPy](https://simpy.readthedocs.io/) discrete-event simulation of the post-disaster permitting workflow—from debris removal and plan preparation through county review to construction readiness. The model supports Monte Carlo experiments, policy lever comparisons, AI-assisted review scenarios, and thesis-style visualizations.
+A [SimPy](https://simpy.readthedocs.io/) discrete-event simulation of the post-disaster permitting workflow—from debris removal and plan preparation through county review to construction readiness. The model supports Monte Carlo experiments, policy scenario comparisons, output visualizations.
 
 **Repository:** [github.com/mfinn36/permitting-model](https://github.com/mfinn36/permitting-model)
 
@@ -47,7 +47,7 @@ Start with [`notebooks/run_simulation.ipynb`](notebooks/run_simulation.ipynb) fo
 | `repo_paths.py` | `DATA_DIR`, `RESULTS_DIR`, and other standard paths |
 | `data/` | Empirical inputs (cross-case timelines, pre-application duration CSVs) |
 | `data/pre_application/` | Disaster-to-application timing data and `fit_data.ipynb` |
-| `notebooks/` | Analysis and thesis figure notebooks |
+| `notebooks/` | Analysis and output figure notebooks |
 | `results/` | Generated CSVs and PNGs (created at runtime; not committed) |
 
 ## Permit segments
