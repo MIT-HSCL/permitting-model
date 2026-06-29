@@ -2,7 +2,7 @@
 
 A [SimPy](https://simpy.readthedocs.io/) discrete-event simulation of the post-disaster permitting workflow—from debris removal and plan preparation through county review to construction readiness. The model supports Monte Carlo experiments, policy scenario comparisons, and output visualizations.
 
-**Repository:** [github.com/mfinn36/permitting-model](https://github.com/mfinn36/permitting-model)
+**Forked from:** [mfinn36/permitting-model](https://github.com/mfinn36/permitting-model)
 
 ## Quick start
 
