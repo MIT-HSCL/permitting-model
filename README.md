@@ -147,6 +147,9 @@ All durations are in **days**. See docstrings in `permit_simulation.py` for dist
 
 If you use this code in research, please cite your copy of the repository and the associated thesis. A formal citation block can be added once the thesis is published.
 
+Megan Finnigan, A Systems Approach to Policy Interventions for Post-Disaster Housing Permitting, 2026, 5/27/26.
+Advisors: Jarrod Goentzel, Lauren Finegan
+
 ## License
 
 [MIT License](LICENSE) — Copyright (c) 2026 Megan Finnigan
